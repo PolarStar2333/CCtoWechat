@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCtoWechat — Claude Code 接入微信 · 完整部署教程</title>
+<style>
+  :root {
+    --bg: #fafafa; --card: #fff; --text: #1a1a1a; --muted: #777;
+    --accent: #d2691e; --border: #e0e0e0; --code-bg: #f4f4f5;
+    --info: #e8f4fd; --warn: #fff8e1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111827; --card: #1f2937; --text: #e5e7eb; --muted: #9ca3af;
+      --accent: #f08a5d; --border: #374151; --code-bg: #0f0f1a;
+      --info: #1e3a5f; --warn: #3d2e0a;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif; background: var(--bg); color: var(--text); line-height: 1.78; padding: 2rem 1rem; }
+  .wrap { max-width: 840px; margin: 0 auto; }
+
+  h1 { font-size: 2rem; color: var(--accent); border-bottom: 3px solid var(--accent); padding-bottom: 0.4rem; margin-bottom: 0.3rem; }
+  h1 small { display: block; font-size: 0.9rem; color: var(--muted); font-weight: 400; margin-top: 0.2rem; }
+  h2 { font-size: 1.3rem; margin: 2.5rem 0 0.8rem; padding-left: 0.5rem; border-left: 3px solid var(--accent); }
+  h3 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
+
+  p, li { margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1rem 0; }
+  .info { background: var(--info); padding: 0.8rem 1.2rem; border-radius: 6px; margin: 0.8rem 0; font-size: 0.92em; }
+  .warn { background: var(--warn); padding: 0.8rem 1.2rem; border-radius: 6px; margin: 0.8rem 0; font-size: 0.92em; }
+
+  code { background: var(--code-bg); padding: 0.12em 0.4em; border-radius: 3px; font-size: 0.9em; font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.2rem; overflow-x: auto; font-size: 0.85em; line-height: 1.55; margin: 0.7rem 0; }
+  pre code { background: none; padding: 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.93em; }
+  th, td { padding: 0.55rem 0.7rem; border: 1px solid var(--border); text-align: left; }
+  th { background: var(--code-bg); font-weight: 600; }
+
+  .flow { text-align: center; font-family: monospace; font-size: 0.82em; padding: 1rem; background: var(--code-bg); border-radius: 6px; line-height: 2.2; }
+  .flow b { color: var(--accent); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; color: #fff; }
+  .badge-win { background: #0078d4; }
+  .badge-py { background: #3776ab; }
+  .badge-mit { background: #6c757d; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+  a { color: var(--accent); }
+  .toc a { display: block; padding: 0.15rem 0; color: var(--text); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>CCtoWechat <small>Claude Code 接入个人微信 · 完整部署与开发教程</small></h1>
+
+<p style="margin-top:1rem;">
+  <span class="badge badge-win">Windows</span>
+  <span class="badge badge-py">Python 3.10+</span>
+  <span class="badge badge-mit">MIT</span>
+</p>
+
+<div class="info"><strong>效果</strong>：微信里和你的 Claude Code 实时对话——消息注入本地终端，Claude 的回复自动发回微信。不需要公网 IP、不需要服务器、不需要 API Key。</div>
+
+<!-- ====== TOC ====== -->
+<div class="card toc">
+<strong>目录</strong><br>
+<a href="#s1">1. 工作原理</a>
+<a href="#s2">2. 环境要求</a>
+<a href="#s3">3. 部署步骤（4 步）</a>
+<a href="#s4">4. 日常使用</a>
+<a href="#s5">5. 从终端主动发微信</a>
+<a href="#s6">6. 远程权限审核</a>
+<a href="#s7">7. 项目文件说明</a>
+<a href="#s8">8. 命令行参数</a>
+<a href="#s9">9. 技术架构</a>
+<a href="#s10">10. 同类方案对比</a>
+<a href="#s11">11. 优势与局限</a>
+<a href="#s12">12. 故障排除</a>
+<a href="#s13">13. 开源与贡献</a>
+</div>
+
+<!-- ====== 原理 ====== -->
+<h2 id="s1">1. 工作原理</h2>
+
+<div class="flow"><b>微信</b> ⟷ <b>腾讯 iLink 服务器</b> ⟷ <b>bridge.py</b> ⟷ <b>Claude Code 终端</b></div>
+
+<table>
+<tr><th>环节</th><th>实现</th></tr>
+<tr><td>微信 ⇄ 电脑</td><td>腾讯 <strong>iLink Bot API</strong>（2025 年开放的官方接口），HTTP JSON 长轮询，无需公网 IP</td></tr>
+<tr><td>消息注入终端</td><td>Windows <code>keybd_event</code> API 模拟 Ctrl+V 粘贴 + 回车</td></tr>
+<tr><td>抓取 Claude 回复</td><td>监控 Claude Code JSONL 对话日志，等 <code>end_turn</code> 后收集整轮所有文字</td></tr>
+</table>
+
+<div class="info">这套方案完全独立于 OpenClaw/CowAgent 等框架，直接调用腾讯底层 API，无需安装任何微信插件或 npm 包。</div>
+
+<!-- ====== 环境 ====== -->
+<h2 id="s2">2. 环境要求</h2>
+
+<table>
+<tr><th>项目</th><th>要求</th><th>检查命令</th></tr>
+<tr><td>操作系统</td><td>Windows 10 / 11</td><td>—</td></tr>
+<tr><td>Python</td><td>≥ 3.10</td><td><code>python --version</code></td></tr>
+<tr><td>Claude Code</td><td>已安装并登录</td><td><code>claude --version</code></td></tr>
+<tr><td>微信</td><td>iOS ≥ 8.0.70 或 Android ≥ 8.0.69</td><td>—</td></tr>
+</table>
+
+<pre><code># 安装 Python 依赖
+pip install httpx pyperclip pygetwindow</code></pre>
+
+<div class="info"><code>pyperclip</code> 和 <code>pygetwindow</code> 为可选依赖——缺少时程序自动降级，但建议安装以获得最稳定体验。</div>
+
+<!-- ====== 部署 ====== -->
+<h2 id="s3">3. 部署步骤</h2>
+
+<h3>第一步：准备文件</h3>
+<p>将以下文件放到一个目录中（例 <code>D:\CCtoWechat\</code>）：</p>
+<ul>
+  <li><code>bridge.py</code> — 桥接主程序</li>
+  <li><code>run.bat</code> — Windows 启动脚本</li>
+</ul>
+
+<h3>第二步：启动桥接</h3>
+<pre><code>cd D:\CCtoWechat
+python bridge.py</code></pre>
+<p>或直接双击 <code>run.bat</code>。</p>
+<p>首次启动会打印一个二维码 URL：</p>
+<pre><code>请用微信扫描：
+  https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=...</code></pre>
+
+<h3>第三步：微信扫码绑定</h3>
+<p>把二维码 URL 发到微信里点开，按提示完成授权。</p>
+<p>终端显示 <code>登录成功 (xxxx@im.bot)</code> 即完成绑定。</p>
+<div class="info">凭证自动保存到 <code>credentials.json</code>，以后启动无需重新扫码。该文件包含你的 Bot Token，<strong>请勿分享给他人</strong>。</div>
+
+<h3>第四步：开始对话</h3>
+<p>看到 <code>监听中...</code> 后，在微信里发给刚才绑定的 Bot，消息会自动注入终端，Claude 的回复也会自动发回微信。</p>
+
+<!-- ====== 日常使用 ====== -->
+<h2 id="s4">4. 日常使用</h2>
+
+<table>
+<tr><th>场景</th><th>操作</th></tr>
+<tr><td>日常对话</td><td>打开 Claude Code 终端 → 启动桥接 → 微信发消息</td></tr>
+<tr><td>开机自启</td><td>Win+R → <code>shell:startup</code> → 放入 <code>run.bat</code> 快捷方式</td></tr>
+<tr><td>多 Claude 会话</td><td>不加参数自动跟随最新；或用 <code>--session</code> 锁定</td></tr>
+<tr><td>主动发微信</td><td>见下方 HTTP /send 端点</td></tr>
+<tr><td>重新扫码</td><td>删除 <code>credentials.json</code>，重启桥接</td></tr>
+</table>
+
+<!-- ====== HTTP ====== -->
+<h2 id="s5">5. 从终端主动给微信发消息</h2>
+
+<p>桥接启动后在 <code>127.0.0.1:9876</code> 提供 HTTP <code>/send</code> 端点：</p>
+
+<pre><code># curl
+curl -X POST http://127.0.0.1:9876/send \
+  -H "Content-Type: application/json" \
+  -d '{"text": "你好，来自终端。"}'
+
+# 或 Python
+python -c "
+import urllib.request, json
+data = json.dumps({'text': '你好'}).encode()
+urllib.request.urlopen(urllib.request.Request(
+    'http://127.0.0.1:9876/send', data=data,
+    headers={'Content-Type': 'application/json'}, method='POST'))
+"</code></pre>
+
+<div class="info">注意：需要你之前在微信发过至少一条消息，桥接才有你的 <code>context_token</code>。</div>
+
+<!-- ====== 远程审核 ====== -->
+<h2 id="s6">6. 远程权限审核</h2>
+
+<p>当你离开电脑、只带手机时，Claude Code 的权限弹窗谁来处理？CCtoWechat 支持<strong>远程审核</strong>：</p>
+
+<h3>工作流</h3>
+<div class="flow"><b>Claude 弹权限</b> → <b>Hook 写文件</b> → <b>桥接检测</b> → <b>微信通知你</b> → <b>你回 /yes 或 /no</b> → <b>桥接注入终端</b></div>
+
+<h3>配置</h3>
+<p>在 Claude Code 的 <code>~/.claude/settings.json</code> 中添加：</p>
+<pre><code>{
+  "hooks": {
+    "PermissionRequest": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "python 你的路径/approval_hook.py"
+      }]
+    }]
+  }
+}</code></pre>
+
+<h3>使用</h3>
+<ol>
+  <li>Claude 执行需要权限的操作 → Hook 自动触发</li>
+  <li>微信收到通知：<code>工具: Bash\n内容: rm -rf ...\n\n回复 /yes 批准，/no 拒绝</code></li>
+  <li>你回复 <code>/yes</code> → 桥接注入 <code>yes</code> 到终端 → Claude 继续执行</li>
+  <li>你回复 <code>/no</code> → 拒绝</li>
+</ol>
+
+<h3>去重机制</h3>
+<p>Claude Code 的 TUI 刷新会导致同一权限弹窗重复触发 Hook。桥接对比待发内容和上一条通知——一样就跳过，不一样才发。同一弹窗只骚扰一次。</p>
+
+<div class="info">审核消息以 <code>/yes</code> 或 <code>/no</code> 开头才会被识别为审核回复。普通消息不受影响。</div>
+
+<!-- ====== 文件说明 ====== -->
+<h2 id="s7">7. 项目文件说明</h2>
+
+<table>
+<tr><th>文件</th><th>说明</th></tr>
+<tr><td><code>bridge.py</code></td><td>主程序（~450 行），iLink 协议、终端注入、JSONL 监控、审批转发、HTTP /send</td></tr>
+<tr><td><code>approval_hook.py</code></td><td>权限审核 Hook（~19 行），转发 PermissionRequest 到桥接</td></tr>
+<tr><td><code>run.bat</code></td><td>Windows 一键启动脚本</td></tr>
+<tr><td><code>index.html</code></td><td>本教程</td></tr>
+<tr><td><code>requirements.txt</code></td><td>Python 依赖列表</td></tr>
+<tr><td><code>README.md</code></td><td>英文快速入门</td></tr>
+<tr><td><code>LICENSE</code></td><td>MIT 许可证</td></tr>
+<tr><td><code>.gitignore</code></td><td>排除凭证和临时文件</td></tr>
+<tr><td colspan="2" style="color:var(--muted)"><em>以下为运行时自动生成的文件：</em></td></tr>
+<tr><td><code>credentials.json</code></td><td>iLink 登录凭证（自动生成，勿泄露）</td></tr>
+<tr><td><code>cursor.json</code></td><td>消息游标（自动维护）</td></tr>
+<tr><td><code>last_user.json</code></td><td>最近微信用户信息（供 /send 使用）</td></tr>
+<tr><td><code>session_id.txt</code></td><td>锁定的会话 ID（使用 --session 时写入）</td></tr>
+</table>
+
+<!-- ====== 命令行 ====== -->
+<h2 id="s8">8. 命令行参数</h2>
+
+<pre><code>python bridge.py [--session SESSION_ID]</code></pre>
+
+<table>
+<tr><th>参数</th><th>行为</th></tr>
+<tr><td>（无参数）</td><td><strong>推荐</strong>：自动检测最新活跃的 Claude Code 会话 JSONL</td></tr>
+<tr><td><code>--session &lt;ID&gt;</code></td><td>锁定到指定会话 JSONL。当你同时开多个 Claude Code 终端时使用</td></tr>
+</table>
+
+<p>会话 ID 可以在 <code>~/.claude/projects/&lt;项目名&gt;/</code> 目录中查看（JSONL 文件名即为会话 ID）。</p>
+
+<!-- ====== 技术架构 ====== -->
+<h2 id="s9">9. 技术架构</h2>
+
+<h3>8.1 iLink Bot API</h3>
+<p>腾讯 2025 年推出的微信个人 Bot 通信协议，域名 <code>ilinkai.weixin.qq.com</code>。纯 HTTP JSON，7 个端点：</p>
+<table>
+<tr><th>端点</th><th>方法</th><th>用途</th></tr>
+<tr><td><code>/ilink/bot/get_bot_qrcode</code></td><td>GET</td><td>获取登录二维码</td></tr>
+<tr><td><code>/ilink/bot/get_qrcode_status</code></td><td>GET</td><td>轮询扫码状态</td></tr>
+<tr><td><code>/ilink/bot/getupdates</code></td><td>POST</td><td>长轮询收消息（hold 约 35s）</td></tr>
+<tr><td><code>/ilink/bot/sendmessage</code></td><td>POST</td><td>发送回复（需 <code>context_token</code>）</td></tr>
+<tr><td><code>/ilink/bot/getuploadurl</code></td><td>POST</td><td>获取 CDN 上传签名</td></tr>
+<tr><td><code>/ilink/bot/getconfig</code></td><td>POST</td><td>获取 typing ticket</td></tr>
+<tr><td><code>/ilink/bot/sendtyping</code></td><td>POST</td><td>发送"正在输入"状态</td></tr>
+</table>
+
+<div class="info">关键设计：每条消息都带 <code>context_token</code>，回复时<strong>必须原样携带</strong>，否则消息无法投递到正确的对话窗口。</div>
+
+<h3>8.2 回复抓取策略</h3>
+<p>bridge.py 监控 Claude Code 的 JSONL 会话文件（路径：<code>~/.claude/projects/&lt;项目&gt;/&lt;session&gt;.jsonl</code>），采用精确的事件驱动策略：</p>
+<ol>
+  <li><strong>第一阶段</strong>：等待注入的用户消息出现在 JSONL 中</li>
+  <li><strong>第二阶段</strong>：等待 <code>stop_reason = "end_turn"</code> 的 assistant 消息（过滤掉思考过程和工具调用）</li>
+  <li><strong>拼接</strong>：回头收集本轮对话中所有 assistant 文本（包括 <code>tool_use</code> 前的上下文文字），用空行拼接后一并发送</li>
+</ol>
+<p>这个策略不需要任何时间猜测，完全由 Claude Code 的原生事件驱动。</p>
+
+<h3>8.3 终端注入</h3>
+<p>经过多次方案对比（PowerShell SendKeys / pyautogui.write / ctypes SendInput），最终采用：</p>
+<ul>
+  <li><code>pyperclip.copy()</code> 将消息写入剪贴板</li>
+  <li>Windows <code>keybd_event</code> API 模拟 Ctrl+V + Enter</li>
+</ul>
+<p>这是最底层的按键模拟方案，经过后台进程注入验证，稳定性最好。</p>
+
+<h3>8.4 会话自动跟随</h3>
+<p>不加 <code>--session</code> 时，bridge.py 在每条消息处理前重新扫描 <code>~/.claude/projects/</code>，找最近修改的 JSONL。这保证了切换到新的 Claude Code 会话时无需重启。</p>
+
+<!-- ====== 对比 ====== -->
+<h2 id="s12">10. 同类方案对比</h2>
+
+<table>
+<tr><th>方案</th><th>语言</th><th>依赖</th><th>需要 API Key</th><th>Agent 能力</th><th>适合场景</th></tr>
+<tr><td><strong>CCtoWechat</strong></td><td>Python</td><td>httpx</td><td>❌</td><td>终端原生</td><td>最小依赖、完全可控</td></tr>
+<tr><td>cc-weixin</td><td>Node.js</td><td>@anthropic-ai SDK</td><td>✅</td><td>Agent SDK</td><td>快速体验</td></tr>
+<tr><td>claude-weixin-channel</td><td>Node.js</td><td>MCP + Hooks</td><td>❌</td><td>流式 + 进度</td><td>高级功能需求</td></tr>
+<tr><td>cc-connect</td><td>Node.js</td><td>多 SDK</td><td>取决于模型</td><td>多 Agent</td><td>多平台多模型</td></tr>
+<tr><td>AgentBridge</td><td>.NET</td><td>各 Agent CLI</td><td>❌</td><td>8+ Agent</td><td>多 Agent 切换</td></tr>
+<tr><td>WeChat Bridge</td><td>Python</td><td>httpx + SQLite</td><td>❌</td><td>HTTP 网关</td><td>服务器推送/告警</td></tr>
+<tr><td>CowAgent</td><td>Python</td><td>大型框架</td><td>✅</td><td>全功能</td><td>企业级部署</td></tr>
+</table>
+
+<p>CCtoWechat 的定位：<strong>最小依赖、代码可审计、零框架开销</strong>。不做 Agent，只做桥接——Claude Code 在终端的能力就是你的能力。</p>
+
+<!-- ====== 优势与局限 ====== -->
+<h2 id="s12">10. 优势与局限</h2>
+
+<h3>优势</h3>
+<table>
+<tr><th>优势</th><th>说明</th></tr>
+<tr><td>🔑 零 API Key</td><td>不需要 Anthropic / OpenAI / 中转站 API Key。直接调用本机 Claude Code CLI</td></tr>
+<tr><td>🌐 零公网 IP</td><td>iLink 长轮询拉取消息，不需要服务器、不需要 frp/ngrok</td></tr>
+<tr><td>📦 零框架依赖</td><td>不依赖 OpenClaw、CowAgent、Node.js 等重型框架，只依赖 <code>httpx</code></td></tr>
+<tr><td>👁 代码完全可审计</td><td>核心仅 ~370 行 Python，30 分钟即可通读</td></tr>
+<tr><td>🛡 无 Agent 安全风险</td><td>不做文件系统访问、不执行命令、不运行 Agent。Claude 的回复是你自己在终端看到的，不会偷偷操作</td></tr>
+<tr><td>🏛 腾讯官方通道</td><td>iLink Bot API 是腾讯 2025 年开放的个人微信 Bot 协议，非逆向/注入，无封号风险</td></tr>
+<tr><td>🔄 自动跟随会话</td><td>切换 Claude Code 终端时自动检测最新 JSONL，无需重启</td></tr>
+<tr><td>📝 完整回复拼接</td><td>等 <code>end_turn</code> 后回溯整轮所有文字，工具调用前的上下文也不会丢</td></tr>
+<tr><td>♾ 无超时等待</td><td>阶段 2 等 <code>end_turn</code> 无时间上限，Claude 思考再久也不会丢回复</td></tr>
+<tr><td>📡 HTTP /send 端点</td><td>内置 HTTP 接口，可在脚本、定时任务中主动向微信推送消息</td></tr>
+</table>
+
+<h3>局限</h3>
+<table>
+<tr><th>局限</th><th>说明</th><th>影响程度</th></tr>
+<tr><td>🪟 仅 Windows</td><td>终端注入依赖 <code>keybd_event</code> API 和剪贴板，macOS/Linux 待适配</td><td>高</td></tr>
+<tr><td>📝 仅文本</td><td>不支持图片、语音、文件收发（iLink 协议支持，待实现）</td><td>中</td></tr>
+<tr><td>⏳ 无流式输出</td><td>回复在 Claude 完成后一次性发送，微信里看不到逐字输出的效果</td><td>中</td></tr>
+<tr><td>🔞 不支持群聊</td><td>iLink 协议限制，Bot 只能私聊</td><td>中</td></tr>
+<tr><td>🕐 思考期间静默</td><td>Claude 思考过程中微信无反馈。如思考超过 10 分钟，阶段 1 可能超时</td><td>中</td></tr>
+<tr><td>💻 终端须可见</td><td>终端窗口最小化时注入可能失败（Windows 焦点机制）</td><td>低</td></tr>
+<tr><td>⚠ iLink 协议实验性</td><td>腾讯未正式文档化该 API，可能在未来版本中变更</td><td>中</td></tr>
+<tr><td>⏰ 24 小时会话窗口</td><td>iLink 的 Bot Token 有效期约 24 小时，过期需重新扫码</td><td>低</td></tr>
+<tr><td>🔤 中文编码</td><td>终端日志中中文显示为乱码（GBK vs UTF-8，不影响实际功能）</td><td>低</td></tr>
+</table>
+
+<!-- ====== 故障排除 ====== -->
+<h2 id="s12">11. 故障排除</h2>
+
+<div class="warn"><strong>Q: 消息没注入到终端</strong><br>A: 1) 确保终端窗口在桌面可见（未最小化）；2) <code>pip install pyperclip</code>；3) 重启桥接。</div>
+
+<div class="warn"><strong>Q: 微信收不到回复</strong><br>A: 1) 确保你先在微信发过至少一条消息（桥接需要 <code>context_token</code>）；2) 确认只开了一个 Claude Code 终端；3) 等 Claude 完成整轮思考后再发下一条消息。</div>
+
+<div class="warn"><strong>Q: 切换 Claude Code 会话后收不到回复</strong><br>A: 不加 <code>--session</code> 参数，桥接会<strong>自动跟随最新会话</strong>。如果已经用了 <code>--session</code>，删掉参数重启即可。</div>
+
+<div class="warn"><strong>Q: Session 过期（错误码 -14）</strong><br>A: 删除 <code>credentials.json</code> 和 <code>cursor.json</code>，重新运行扫码授权。</div>
+
+<div class="warn"><strong>Q: 二维码过期</strong><br>A: 程序会自动刷新（最多 3 次）。多次过期的话重启桥接即可。</div>
+
+<div class="warn"><strong>Q: 回复只收到后半段</strong><br>A: 已修复——v4 会等 <code>end_turn</code> 后收集整轮所有 assistant 文本再发送。如果仍有此问题，请提交 Issue。</div>
+
+<div class="warn"><strong>Q: 端口 9876 被占用</strong><br>A: 有其他程序占用了该端口（可能是上次未正常退出的桥接进程）。在任务管理器中找到占用该端口的 python.exe 进程并结束。</div>
+
+<!-- ====== 开源 ====== -->
+<h2 id="s12">12. 开源与贡献</h2>
+
+<p>CCtoWechat 以 MIT 许可证开源。</p>
+<ul>
+  <li>核心代码 <code>bridge.py</code> 仅 ~370 行，易于审计和二次开发</li>
+  <li>欢迎提 Issue 和 PR</li>
+  <li>腾讯 iLink API 属于实验性开放接口，API 可能变更——如发现协议更新请反馈</li>
+</ul>
+
+<h3>开发路线图</h3>
+<ul>
+  <li>✅ 文本消息收发（双向）</li>
+  <li>✅ 终端注入（剪贴板 + keybd_event，4 种方案验证后最稳定）</li>
+  <li>✅ JSONL 精确监控（end_turn 事件驱动）</li>
+  <li>✅ 整轮回复拼接（tool_use 前文字不丢）</li>
+  <li>✅ HTTP /send 主动发送端点</li>
+  <li>✅ 会话自动跟随（切换终端无需重启）</li>
+  <li>✅ 阶段 2 无超时等待（思考不限时长）</li>
+  <li>⬜ macOS / Linux 注入支持</li>
+  <li>⬜ 图片 / 文件收发（iLink 协议已支持 CDN 上传）</li>
+  <li>⬜ 流式输出转发（需要改造 Claude Code 输出捕获方式）</li>
+  <li>⬜ 多 Bot 多用户对话隔离</li>
+  <li>⬜ "正在输入..." 状态同步</li>
+</ul>
+
+<hr>
+<p style="text-align:center;color:var(--muted);font-size:0.85em;">
+  CCtoWechat · Claude Code to WeChat Bridge<br>
+  MIT License · 纯 Python · 零框架 · 完全可审计
+</p>
+
+</div>
+</body>
+</html>

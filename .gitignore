@@ -1,0 +1,7 @@
+credentials.json
+cursor.json
+last_user.json
+session_id.txt
+approval_pending.json
+__pycache__/
+*.pyc
