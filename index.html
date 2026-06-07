@@ -104,16 +104,22 @@
 
 <table>
 <tr><th>项目</th><th>要求</th><th>检查命令</th></tr>
-<tr><td>操作系统</td><td>Windows 10 / 11</td><td>—</td></tr>
+<tr><td>操作系统</td><td>Windows ✅ ｜ macOS 🧪 ｜ Linux 🧪</td><td>—</td></tr>
 <tr><td>Python</td><td>≥ 3.10</td><td><code>python --version</code></td></tr>
 <tr><td>Claude Code</td><td>已安装并登录</td><td><code>claude --version</code></td></tr>
 <tr><td>微信</td><td>iOS ≥ 8.0.70 或 Android ≥ 8.0.69</td><td>—</td></tr>
 </table>
 
 <pre><code># 安装 Python 依赖
-pip install httpx pyperclip pygetwindow</code></pre>
+pip install httpx pyperclip pygetwindow
 
-<div class="info"><code>pyperclip</code> 和 <code>pygetwindow</code> 为可选依赖——缺少时程序自动降级，但建议安装以获得最稳定体验。</div>
+# Linux 额外安装
+sudo apt install xdotool
+
+# macOS 需开辅助功能权限
+# 系统设置 → 隐私与安全性 → 辅助功能 → 添加终端</code></pre>
+
+<div class="info"><code>pyperclip</code> 和 <code>pygetwindow</code> 为可选依赖——缺少时程序自动降级。🧪 Linux / macOS 支持由社区贡献，作者无设备实测，有问题请提 Issue。</div>
 
 <!-- ====== 部署 ====== -->
 <h2 id="s3">3. 部署步骤</h2>

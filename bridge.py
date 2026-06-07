@@ -12,6 +12,7 @@ CCtoWechat — Claude Code 接入个人微信
   python bridge.py --session <SESSION_ID> # 锁定特定会话
 
 依赖: pip install httpx pyperclip pygetwindow
+平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
 import argparse, asyncio, ctypes, httpx, json, base64, os, random, subprocess, time, traceback
@@ -115,35 +116,80 @@ async def sendmsg(client, tok, to_user, text, ctx_token):
         "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=15)
     return r.status_code == 200
 
-# ── 注入（剪贴板 + keybd_event，已验证）──
-_user32 = ctypes.windll.user32
-_VK_CTRL = 0x11; _VK_V = 0x56; _VK_RET = 0x0D; _KEYUP = 0x0002
+# ── 注入（剪贴板 + 模拟粘贴回车，三平台支持）──
+# NOTE: Linux / macOS 支持由社区贡献，作者仅有 Windows 设备，未实际测试。
+#       如遇问题请提交 Issue：https://gitee.com/Polarstar2333/ccto-wechat/issues
+_WIN = os.name == "nt"
+_OSX = os.uname().sysname == "Darwin" if hasattr(os, "uname") else False
+
+def _inject_win(text):
+    """Windows: keybd_event 模拟 Ctrl+V + Enter"""
+    user32 = ctypes.windll.user32
+    VK_CTRL, VK_V, VK_RET, KEYUP = 0x11, 0x56, 0x0D, 0x0002
+    user32.keybd_event(VK_CTRL, 0, 0, 0)
+    user32.keybd_event(VK_V, 0, 0, 0); time.sleep(0.03)
+    user32.keybd_event(VK_V, 0, KEYUP, 0); time.sleep(0.01)
+    user32.keybd_event(VK_CTRL, 0, KEYUP, 0)
+    time.sleep(0.1)
+    user32.keybd_event(VK_RET, 0, 0, 0); time.sleep(0.03)
+    user32.keybd_event(VK_RET, 0, KEYUP, 0)
+    return True
+
+def _inject_osx(text):
+    """macOS: osascript 模拟 Cmd+V + Return"""
+    script = f'''
+    tell application "System Events"
+        keystroke "v" using command down
+        delay 0.1
+        keystroke return
+    end tell
+    '''
+    subprocess.run(["osascript", "-e", script], check=False)
+    return True
+
+def _inject_linux(text):
+    """Linux: xdotool 模拟 Ctrl+V + Return（需 apt install xdotool）"""
+    subprocess.run(["xdotool", "key", "ctrl+v"], check=False)
+    time.sleep(0.1)
+    subprocess.run(["xdotool", "key", "Return"], check=False)
+    return True
 
 def inject_to_terminal(text):
-    if pyperclip is None:
-        print("(pyperclip未安装)", end="", flush=True)
-        return False
-    try:
-        pyperclip.copy(text)
-    except Exception:
-        # pyperclip 失败时用 clip.exe 备用
+    # 1) 写入剪贴板
+    if pyperclip is not None:
         try:
-            subprocess.run(['clip'], input=text.encode('utf-16-le', errors='replace'), check=False)
+            pyperclip.copy(text)
         except Exception:
-            pass
+            _clip_fallback(text)
+    else:
+        _clip_fallback(text)
     time.sleep(0.15)
 
-    # Ctrl 按下
-    _user32.keybd_event(_VK_CTRL, 0, 0, 0)
-    _user32.keybd_event(_VK_V, 0, 0, 0); time.sleep(0.03)
-    _user32.keybd_event(_VK_V, 0, _KEYUP, 0); time.sleep(0.01)
-    _user32.keybd_event(_VK_CTRL, 0, _KEYUP, 0)
-    time.sleep(0.1)
+    # 2) 模拟粘贴 + 回车
+    if _WIN:
+        return _inject_win(text)
+    elif _OSX:
+        return _inject_osx(text)
+    else:
+        return _inject_linux(text)
 
-    # Enter
-    _user32.keybd_event(_VK_RET, 0, 0, 0); time.sleep(0.03)
-    _user32.keybd_event(_VK_RET, 0, _KEYUP, 0)
-    return True
+def _clip_fallback(text):
+    """剪贴板备用方案"""
+    if _WIN:
+        try:
+            subprocess.run(["clip"], input=text.encode("utf-16-le", errors="replace"), check=False)
+        except Exception:
+            pass
+    elif _OSX:
+        try:
+            subprocess.run(["pbcopy"], input=text.encode(), check=False)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode(), check=False)
+        except Exception:
+            pass
 
 # ── JSONL ──
 def _jsonl():
