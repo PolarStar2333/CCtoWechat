@@ -1,17 +1,20 @@
 # CCtoWechat
 
-Claude Code 接入个人微信。纯 Python 实现，消息注入终端，回复自动发回微信。
+Claude Code 接入个人微信。纯 Python 实现，微信继承终端聊天记录，支持远程权限审核、图片文件接收、AI 提炼会话标题、`/stop` 远程中断。零新增费用，门槛极低。
 
 **无需公网 IP · 无需 API Key · 无需服务器 · 腾讯官方通道 · 无 Node.js 依赖**
 
+> ⚠️ 作者仅有 Windows 设备。Linux / macOS 由社区贡献，可能存在 bug。如有问题请提交 [Issue](https://gitee.com/Polarstar2333/ccto-wechat/issues)
+
 ## 优势
 
-- **继承终端对话** — 不依赖 Agent SDK，直接模拟键盘注入 Claude Code 终端。已有的对话上下文、权限设置、模型选择原封不动，微信只是换了个输入法
+- **继承终端对话** — 不依赖 Agent SDK，直接模拟键盘注入 Claude Code 终端。已有的对话上下文、权限设置、模型选择原封不动，微信只是换了个对话框
 - **远程权限审核** — 人不在电脑前，Claude 弹权限时微信收到通知，回复 `/yes` 批准、`/no` 拒绝。同一权限自动去重，不会重复骚扰
+- **AI 摘要会话列表** — `/resume` 显示的摘要由 AI 生成，比 Claude Code 自带的原始文本截取更可读
+- **随时中断** — `/stop` 一键 Ctrl+C 打断模型思考或工具调用
 - **纯 Python，零门槛** — `pip install` + `python bridge.py` + 微信扫码，三步完成。不需要 Node.js、npm、Go 等运行时
 - **约 900 行，一眼看完** — bridge.py + inject.py + sessions.py，想改什么直接改
-- **跨平台** — Windows / macOS / Linux 键盘注入全部实现
-- **AI 摘要会话列表** — `/resume` 显示的摘要由 AI 生成，比 Claude Code 自带的更可读
+- **跨平台** — Windows ✅ / macOS 🧪 / Linux 🧪。HarmonyOS PC 暂不支持（缺少关键组件）
 
 ## 原理
 
@@ -78,7 +81,7 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 | `/summaries` | 开关 AI 会话摘要 |
 | `/imageloc [路径]` | 查看 / 设置图片和文件保存路径 |
 
-全部命令可混用，不注入终端的本地命令（`/summaries` `/imageloc`）桥接本地处理。
+本地命令（`/summaries` `/imageloc` `/stop`）不注入终端，桥接直接处理。
 
 ## 图片与文件
 
@@ -87,7 +90,7 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 - **`/yes`** — 仅注入图片/文件路径到终端，等 Claude 自然回复
 - **其他文字** — 图片/文件路径 + 文字一并注入，等 Claude 回复
 
-支持 JPEG、PNG、PDF、docx 等常见格式。图片可配合 OCR（可选）识别图中文字。
+支持 JPEG、PNG、PDF、docx 等常见格式。图片查看需模型支持多模态，或搭配 OCR（可选）识别图中文字。
 
 ## 主动发微信
 
@@ -125,9 +128,7 @@ python bridge.py --session <SESSION_ID> # 锁定特定会话
 | OS | Windows ✅ \| macOS 🧪 \| Linux 🧪 |
 | Python | ≥ 3.10 |
 | Claude Code | 已安装并登录 |
-| 微信 | iOS ≥ 8.0.70 / Android ≥ 8.0.69 |
-
-> 🧪 = 社区贡献，作者仅有 Windows 设备。如有问题请提交 [Issue](https://gitee.com/Polarstar2333/ccto-wechat/issues)
+| 微信 | iOS ≥ 8.0.70 / Android ≥ 8.0.69 / HarmonyOS ≥ 6.0（微信 ≥ 8.0.18） |
 
 ## License
 
