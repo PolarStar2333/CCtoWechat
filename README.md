@@ -15,7 +15,7 @@ Claude Code 接入个人微信。纯 Python 实现，消息注入终端，微信
 - **继承终端对话** — 不依赖 Agent SDK，直接模拟键盘注入 Claude Code 终端。已有的对话上下文、权限设置、模型选择原封不动，微信只是换了个对话框
 - **远程权限审核** — 人不在电脑前，Claude 弹权限时微信收到通知，回复 `/yes` 批准、`/no` 拒绝。同一权限自动去重，不会重复骚扰
 - **纯 Python，零门槛** — `pip install` + `python bridge.py` + 微信扫码，三步完成。不需要 Node.js、npm、Go 等运行时
-- **约 900 行，一眼看完** — bridge.py + inject.py + sessions.py，想改什么直接改
+- **约 1400 行，一眼看完** — bridge.py + inject.py + sessions.py + approval_hook.py，想改什么直接改
 - **跨平台** —支持 Windows / macOS / Linux。由于HarmonyOS缺失组件过多，HMPC暂不支持
 - **AI 摘要会话列表** — `/resume` 显示的摘要由 AI 生成，比 Claude Code 自带的更可读
 
@@ -79,8 +79,14 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 | `/clear` | 清空上下文 |
 | `/compact` | 压缩上下文省 token |
 | `/status` | 查看 token 用量 |
+| `/usage` | 查看详细用量 |
 | `/cost` | 查看费用 |
 | `/model` | 切换模型 |
+| `/permissions` | 查看/切换权限模式 |
+| `/agents` | 查看已注册 Agents |
+| `/plugins` | 查看已安装插件 |
+| `/mcp` | 查看 MCP 服务器 |
+| `/help` | 命令帮助 |
 | `/summaries` | 开关 AI 会话摘要 |
 | `/imageloc [路径]` | 查看 / 设置图片和文件保存路径 |
 
@@ -113,10 +119,10 @@ python bridge.py --session <SESSION_ID> # 锁定特定会话
 ## 项目结构
 
 ```
-├── bridge.py                # 主程序（iLink 通信 + 消息处理）
-├── inject.py                # 跨平台键盘注入（Win/Mac/Linux）
-├── sessions.py              # 会话管理 + AI 摘要 + JSONL 读取
-├── approval_hook.py         # 远程权限审核 Hook
+├── bridge.py          # 主程序（iLink 通信 + 消息处理 + 命令分发）
+├── inject.py          # 跨平台键盘注入（Win/Mac/Linux）
+├── sessions.py        # 会话管理 + AI 摘要 + JSONL 统计
+├── approval_hook.py   # 远程权限审核 Hook
 ├── session_summaries.json   # AI 会话摘要缓存
 ├── index.html               # 完整部署教程
 ├── run.bat                  # Windows 一键启动
