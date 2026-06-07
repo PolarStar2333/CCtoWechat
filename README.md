@@ -91,17 +91,3 @@ python bridge.py --session <SESSION_ID> # 锁定特定会话
 ## License
 
 MIT
-
-## 同类对比
-
-| 项目 | 语言 | 部署 | 特点 |
-|------|------|------|------|
-| **CCtoWechat** | 🐍 Python | pip + 扫码 | 无 Node.js 依赖，约 500 行，带完整 HTML 教程，Windows 一键 bat |
-| cc-weixin | Node.js | npx 一键 | 最轻量，约 200 行 |
-| claude-code-wechat | Node.js | npx + setup | 功能最全（图片/文件/语音/心跳） |
-| cc-connect | Go | go install | 多平台桥接（10+ 聊天平台 + 7 个 AI Agent） |
-| claude-plugin-weixin | Plugin | claude plugin install | Claude Code 原生插件形式 |
-
-**CCtoWechat 的优势：** Python 生态，不用装 Node.js；代码短，一眼看完想改就改；HTML 教程图文并茂零基础也能部署。
-
-**其他项目的优势：** cc-weixin 更短更快；claude-code-wechat 功能更多；cc-connect 支持十几个平台；claude-plugin-weixin 安装最简单。
