@@ -1,0 +1,14 @@
+{
+  "1e41f2f1-9866-4fc3-999b-06c5795b9162": "CCtoWechat 开发：远程 /resume 会话列表、权限审核去重、跨平台支持",
+  "8ced2a1e-70a9-4355-a079-89ea6521b812": "CCtoWechat 项目创建：Claude Code 接入个人微信（iLink Bot API）",
+  "d181ab08-fdcf-4ecc-8e72-a66d4873065a": "权限审核调试：Bash 权限弹窗 + 微信远程审批流程测试",
+  "a8a5c9e2-3713-4d8b-a0b4-eadf4d0da88f": "简单问候测试：验证微信到 Claude Code 消息注入通路",
+  "d53d1c08-2921-4ef4-8a8c-c9e1542f1be7": "openARM 机械臂调研 + CCtoWechat 桥接调试，最终整理睡觉",
+  "0a7b44f7-733e-4649-960e-535e2669a7e4": "Claude 思考强度设置 + WeChat 桥接测试 + HK VPN 讨论",
+  "3892cc9f-4474-4c6b-9008-4c1db81a0add": "微型无人机技术报告 .docx 撰写，CRAIC 比赛，WPS 编辑",
+  "6cda95a5-3815-41f1-8452-8b0773950b6c": "大型开发任务恢复（32MB 上下文）",
+  "f1825848-c13d-4fbb-a3a4-9f2498639dc3": "Update Config Skill 安装与配置",
+  "fba67d3b-0a15-45a7-b974-62979c9cb66b": "/model 模型切换 + 功能测试问候",
+  "1276250c-c982-48d0-9c2c-47c6e2f38b24": "恢复上次对话：继续之前被中断的任务",
+  "c0b0a359-fafb-46e1-981b-5c5eb050cd5f": "介绍性对话：Claude Code 功能探索（你好 / 你能干什么）"
+}

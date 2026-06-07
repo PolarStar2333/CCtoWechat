@@ -15,13 +15,13 @@ CCtoWechat — Claude Code 接入个人微信
 平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
-import argparse, asyncio, ctypes, httpx, json, base64, os, random, subprocess, time, traceback
+import argparse, asyncio, httpx, json, base64, random, time, traceback
 from pathlib import Path
 
-try:
-    import pyperclip
-except ImportError:
-    pyperclip = None
+from inject import inject_to_terminal, select_session, send_interrupt
+from sessions import (init as sessions_init, set_locked_jsonl,
+                      get_session_list, get_last_reply, wait_reply,
+                      find_session_dir, toggle_summaries, _jsonl as sessions_jsonl)
 
 API_BASE = "https://ilinkai.weixin.qq.com"
 CH_VERSION = "1.0.2"
@@ -31,27 +31,9 @@ CRED_FILE = ROOT / "credentials.json"
 BUF_FILE = ROOT / "cursor.json"
 LAST_USER_FILE = ROOT / "last_user.json"
 APPROVAL_FILE = ROOT / "approval_pending.json"
-SESSION_FILE = ROOT / "session_id.txt"
-def _find_session_dir():
-    """自动探测 Claude Code 项目目录（找最近有 JSONL 文件的那个）"""
-    base = Path.home() / ".claude" / "projects"
-    if not base.exists():
-        return base / "C--Users-zshyl"  # 兜底
-    # 找包含 JSONL 文件的最近修改的目录
-    best = None
-    best_time = 0
-    for d in base.iterdir():
-        if d.is_dir():
-            files = list(d.glob("*.jsonl"))
-            if files:
-                mt = max(f.stat().st_mtime for f in files)
-                if mt > best_time:
-                    best_time = mt
-                    best = d
-    return best or (base / "C--Users-zshyl")
 
-SESSION_DIR = _find_session_dir()
-LOCKED_JSONL = None
+SESSION_DIR = find_session_dir()
+sessions_init(SESSION_DIR, ROOT)
 
 # ── helpers ──
 def _uin():
@@ -116,220 +98,51 @@ async def sendmsg(client, tok, to_user, text, ctx_token):
         "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=15)
     return r.status_code == 200
 
-# ── 注入（剪贴板 + 模拟粘贴回车，三平台支持）──
-# NOTE: Linux / macOS 支持由社区贡献，作者仅有 Windows 设备，未实际测试。
-#       如遇问题请提交 Issue：https://gitee.com/Polarstar2333/ccto-wechat/issues
-_WIN = os.name == "nt"
-_OSX = os.uname().sysname == "Darwin" if hasattr(os, "uname") else False
 
-def _inject_win(text):
-    """Windows: keybd_event 模拟 Ctrl+V + Enter"""
-    user32 = ctypes.windll.user32
-    VK_CTRL, VK_V, VK_RET, KEYUP = 0x11, 0x56, 0x0D, 0x0002
-    user32.keybd_event(VK_CTRL, 0, 0, 0)
-    user32.keybd_event(VK_V, 0, 0, 0); time.sleep(0.03)
-    user32.keybd_event(VK_V, 0, KEYUP, 0); time.sleep(0.01)
-    user32.keybd_event(VK_CTRL, 0, KEYUP, 0)
-    time.sleep(0.1)
-    user32.keybd_event(VK_RET, 0, 0, 0); time.sleep(0.03)
-    user32.keybd_event(VK_RET, 0, KEYUP, 0)
-    return True
+async def send_image(client, tok, to_user, ctx_token, image_bytes):
+    """发送图片：AES-128-ECB 加密 → 上传 CDN → sendmessage"""
+    import secrets
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-def _inject_osx(text):
-    """macOS: osascript 模拟 Cmd+V + Return"""
-    script = f'''
-    tell application "System Events"
-        keystroke "v" using command down
-        delay 0.1
-        keystroke return
-    end tell
-    '''
-    subprocess.run(["osascript", "-e", script], check=False)
-    return True
+    # 1) 生成 AES 密钥（16字节 = 128位）
+    aes_key = secrets.token_bytes(16)
+    # AES-128-ECB 加密（PKCS7 填充）
+    pad_len = 16 - (len(image_bytes) % 16)
+    padded = image_bytes + bytes([pad_len] * pad_len)
+    cipher = Cipher(algorithms.AES(aes_key), modes.ECB())
+    encryptor = cipher.encryptor()
+    encrypted = encryptor.update(padded) + encryptor.finalize()
 
-def _inject_linux(text):
-    """Linux: xdotool 模拟 Ctrl+V + Return（需 apt install xdotool）"""
-    subprocess.run(["xdotool", "key", "ctrl+v"], check=False)
-    time.sleep(0.1)
-    subprocess.run(["xdotool", "key", "Return"], check=False)
-    return True
+    # 2) 获取 CDN 上传 URL
+    r = await client.post(f"{API_BASE}/ilink/bot/getuploadurl",
+        json={"base_info": {"channel_version": CH_VERSION}},
+        headers=_hdrs(tok), timeout=15)
+    if r.status_code != 200:
+        return False
+    up_info = r.json()
+    upload_url = up_info.get("upload_url", "")
+    cdn_url = up_info.get("cdn_url", "")
+    if not upload_url:
+        return False
 
-def inject_to_terminal(text):
-    # 1) 写入剪贴板
-    if pyperclip is not None:
-        try:
-            pyperclip.copy(text)
-        except Exception:
-            _clip_fallback(text)
-    else:
-        _clip_fallback(text)
-    time.sleep(0.15)
+    # 3) 上传加密图片到 CDN
+    r2 = await client.put(upload_url, content=encrypted, timeout=30)
+    if r2.status_code not in (200, 204):
+        return False
 
-    # 2) 模拟粘贴 + 回车
-    if _WIN:
-        return _inject_win(text)
-    elif _OSX:
-        return _inject_osx(text)
-    else:
-        return _inject_linux(text)
-
-def _clip_fallback(text):
-    """剪贴板备用方案"""
-    if _WIN:
-        try:
-            subprocess.run(["clip"], input=text.encode("utf-16-le", errors="replace"), check=False)
-        except Exception:
-            pass
-    elif _OSX:
-        try:
-            subprocess.run(["pbcopy"], input=text.encode(), check=False)
-        except Exception:
-            pass
-    else:
-        try:
-            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode(), check=False)
-        except Exception:
-            pass
-
-# ── JSONL ──
-def _jsonl():
-    """全局扫描所有项目目录，找最近修改的 JSONL"""
-    global LOCKED_JSONL
-    if LOCKED_JSONL: return LOCKED_JSONL
-    base = Path.home() / ".claude" / "projects"
-    if not base.exists():
-        return None
-    best = None; best_time = 0
-    for d in base.iterdir():
-        if not d.is_dir(): continue
-        for f in d.glob("*.jsonl"):
-            mt = f.stat().st_mtime
-            if mt > best_time:
-                best_time = mt; best = f
-    return best
-
-def _text(msg):
-    """只提取 type=text 的内容，过滤掉 thinking/tool_use"""
-    c = msg.get("content", [])
-    if isinstance(c, str): return c
-    if isinstance(c, list):
-        texts = []
-        for it in c:
-            if not isinstance(it, dict): continue
-            if it.get("type") == "text":
-                texts.append(it.get("text", ""))
-        return "".join(texts)
-    return ""
-
-
-def _is_text_response(msg):
-    """只接受 stop_reason=end_turn 且有文本内容的回复"""
-    if msg.get("role") != "assistant": return False
-    if msg.get("stop_reason") != "end_turn": return False
-    content = msg.get("content", [])
-    if not isinstance(content, list): return bool(_text(msg))
-    return any(isinstance(c, dict) and c.get("type") == "text" for c in content)
-
-def _read_new(jsonl_path, pos):
-    try:
-        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
-            f.seek(max(0, pos))
-            return f.readlines(), f.tell()
-    except: return [], pos
-
-def _has_user(lines, fragment):
-    frag = fragment.strip()[:50]
-    for ln in lines:
-        try: obj = json.loads(ln)
-        except: continue
-        msg = obj.get("message") or obj
-        if msg.get("role") == "user" and frag in _text(msg):
-            return True
-    return False
-
-def _collect_all_text(lines):
-    """收集所有 assistant 文本（含 tool_use 前的文字，只过滤掉纯 thinking）"""
-    texts = []
-    for ln in lines:
-        try: obj = json.loads(ln)
-        except: continue
-        msg = obj.get("message") or obj
-        if msg.get("role") != "assistant": continue
-        if msg.get("stop_reason") == "end_turn" or msg.get("stop_reason") == "tool_use":
-            t = _text(msg)
-            if t and len(t) > 2:
-                texts.append(t)
-    return texts
-
-
-def _find_end_turn(lines):
-    """找到最后一条 end_turn 的 assistant 消息，返回其位置索引"""
-    for i in range(len(lines) - 1, -1, -1):
-        try: obj = json.loads(lines[i])
-        except: continue
-        msg = obj.get("message") or obj
-        if msg.get("role") == "assistant" and msg.get("stop_reason") == "end_turn":
-            if any(isinstance(c, dict) and c.get("type") == "text" for c in msg.get("content", [])):
-                return i
-    return None
-
-
-def _all_jsonl():
-    """返回所有项目目录下的 JSONL 文件列表"""
-    base = Path.home() / ".claude" / "projects"
-    if not base.exists(): return []
-    files = []
-    for d in base.iterdir():
-        if d.is_dir():
-            files.extend(d.glob("*.jsonl"))
-    return files
-
-
-async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
-    """两阶段等待：同时监控所有 JSONL，谁先出现用户消息就用谁"""
-    # 注入前快照：记录所有 JSONL 的当前大小
-    snapshots = {}
-    for f in _all_jsonl():
-        try: snapshots[str(f)] = f.stat().st_size
-        except: pass
-
-    found = False; all_lines = []
-
-    # 阶段1：轮询所有 JSONL
-    for _i in range(phase1_timeout):
-        for f in _all_jsonl():
-            key = str(f)
-            sp = snapshots.get(key, 0)
-            lines, _new_pos = await asyncio.to_thread(_read_new, f, sp)
-            if _has_user(lines, inject_text):
-                jsonl = f; found = True
-                all_lines = lines[:]
-                snapshots[key] = _new_pos  # 更新位置
-                print(f" [ph1->ph2:{f.name[:12]}]", flush=True)
-                ei = _find_end_turn(all_lines)
-                if ei is not None:
-                    texts = _collect_all_text(all_lines[:ei + 1])
-                    if texts: return "\n\n".join(texts)
-                break
-            # 有新行就更新位置
-            if lines: snapshots[key] = _new_pos
-        if found: break
-        await asyncio.sleep(1)
-    else:
-        return None  # 阶段1超时
-
-    # 阶段2：只跟踪找到的那个 JSONL，等 end_turn（无上限）
-    while True:
-        sp = snapshots.get(str(jsonl), 0)
-        lines, new_pos = await asyncio.to_thread(_read_new, jsonl, sp)
-        if lines:
-            snapshots[str(jsonl)] = new_pos
-            all_lines.extend(lines)
-            ei = _find_end_turn(all_lines)
-            if ei is not None:
-                texts = _collect_all_text(all_lines[:ei + 1])
-                if texts: return "\n\n".join(texts)
-        await asyncio.sleep(1)
+    # 4) 发送图片消息
+    cid = f"c{int(time.time()*1000)}"
+    r3 = await client.post(f"{API_BASE}/ilink/bot/sendmessage", json={
+        "msg": {"to_user_id": to_user, "client_id": cid, "message_type": 2,
+                "message_state": 2, "context_token": ctx_token,
+                "item_list": [{"type": 2, "image_item": {
+                    "aes_key": base64.b64encode(aes_key).decode(),
+                    "file_size": len(image_bytes),
+                    "cdn_url": cdn_url,
+                    "width": 0, "height": 0,
+                }}]},
+        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=15)
+    return r3.status_code == 200
 
 # ── HTTP /send ──
 last_user = None; tok_g = None; cli_g = None
@@ -337,17 +150,25 @@ last_user = None; tok_g = None; cli_g = None
 async def http_handler(reader, writer):
     global last_user, tok_g, cli_g
     try:
-        data = await asyncio.wait_for(reader.read(8192), timeout=5)
+        data = await asyncio.wait_for(reader.read(65536), timeout=10)
         body = data.decode("utf-8", errors="replace")
         if "POST" in body and "/send" in body:
             for line in body.split("\r\n"):
-                if line.startswith("{") and '"text"' in line:
-                    try:
-                        txt = json.loads(line)["text"]
-                        if last_user and tok_g and cli_g:
-                            ok = await sendmsg(cli_g, tok_g, last_user["to_user"], txt, last_user["ctx_token"])
-                            print(f"   主动发送: {txt[:60]} {'OK' if ok else 'FAIL'}")
-                    except: pass
+                if not line.startswith("{"):
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if last_user and tok_g and cli_g:
+                    to = last_user["to_user"]; ct = last_user["ctx_token"]
+                    if "text" in payload:
+                        ok = await sendmsg(cli_g, tok_g, to, payload["text"], ct)
+                        print(f"   主动发送: {payload['text'][:60]} {'OK' if ok else 'FAIL'}")
+                    elif "image_path" in payload:
+                        img = Path(payload["image_path"]).read_bytes()
+                        ok = await send_image(cli_g, tok_g, to, ct, img)
+                        print(f"   主动发图: {payload['image_path']} {'OK' if ok else 'FAIL'}")
     except: pass
     finally:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"); await writer.drain(); writer.close()
@@ -383,23 +204,193 @@ async def check_approval():
         await asyncio.sleep(1)
 
 # ── 消息 ──
+awaiting_session_select = False  # /resume 后等待用户选号
+awaiting_image_action = False    # 发图/文件后等待 /yes /no
+pending_image_path = ""          # 待处理的文件路径
+pending_is_file = False          # True=文件, False=图片
+
+IMAGES_DIR = ROOT / "images"  # 默认保存位置
+
+REMOTE_COMMANDS = {
+    "/resume", "/clear", "/compact", "/status", "/cost", "/model",
+    "/doctor", "/init", "/config", "/help", "/todos", "/summaries",
+    "/imageloc", "/stop",
+}
+def _is_remote_cmd(text):
+    t = text.strip().lower()
+    for cmd in REMOTE_COMMANDS:
+        if t == cmd or t.startswith(cmd + " "):
+            return True
+    return False
+
 async def handle(client, tok, raw):
-    global last_user, pending_approval
+    global last_user, pending_approval, awaiting_session_select, IMAGES_DIR
+    global awaiting_image_action, pending_image_path, pending_is_file
     if isinstance(raw, str):
         try: msg = json.loads(raw)
         except: return
     else: msg = raw
-    if msg.get("message_type", 0) != 1: return
+    if msg.get("message_type", 0) not in (1, 2): return
     fu = msg.get("from_user_id", "") or msg.get("from_user", "")
     ct = msg.get("context_token", "")
     for item in msg.get("item_list", []):
-        if item.get("type") != 1: continue
+        item_type = item.get("type", 0)
+        # ── 图片消息 ──
+        if item_type == 2:
+            last_user = {"to_user": fu, "ctx_token": ct}
+            img = item.get("image_item", {})
+            media = img.get("media", {})
+            img_url = media.get("full_url", img.get("url", ""))
+            aeskey_hex = img.get("aeskey", "")
+            print(f"\n [{fu[:20]}]: [图片] {img_url[:80]}", flush=True)
+            await sendmsg(client, tok, fu, "收到图片，下载解密中...", ct)
+            img_path = IMAGES_DIR / f"{int(time.time())}.jpg"
+            img_path.parent.mkdir(exist_ok=True)
+            try:
+                r = await client.get(img_url, timeout=30)
+                if r.status_code != 200:
+                    await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
+                    continue
+                data = r.content
+                # 调试：保存原始下载 + 密钥
+                img_path.with_suffix(".raw").write_bytes(data)
+                img_path.with_suffix(".key").write_text(aeskey_hex, encoding="utf-8")
+                # AES 解密（iLink 图片加密）
+                if aeskey_hex:
+                    try:
+                        key = bytes.fromhex(aeskey_hex)
+                        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                        # 先 ECB 后 CBC（不同微信版本加密方式不同）
+                        for mode_desc, cipher in [
+                            ("ECB", Cipher(algorithms.AES(key), modes.ECB())),
+                            ("CBC", Cipher(algorithms.AES(key), modes.CBC(bytes(16)))),
+                        ]:
+                            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
+                            eoi = d.rfind(b'\xff\xd9')
+                            if eoi > 0 and d[:2] == b'\xff\xd8':
+                                data = d[:eoi + 2]; break
+                            if d[:2] == b'\xff\xd8':
+                                pad = d[-1]
+                                if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
+                                    data = d[:-pad]; break
+                        else:
+                            data = d
+                    except ImportError:
+                        pass
+                img_path.write_bytes(data)
+                pending_image_path = str(img_path)
+                pending_is_file = False
+                awaiting_image_action = True
+                await sendmsg(client, tok, fu,
+                    f"图片已保存 ({len(data)//1024}KB)\n\n回复 /yes 仅注入图片地址\n回复其他内容将一并注入图片地址和文字", ct)
+            except Exception as e:
+                await sendmsg(client, tok, fu, f"处理失败: {e}", ct)
+            continue
+        # ── 文件消息 ──
+        if item_type == 4:
+            last_user = {"to_user": fu, "ctx_token": ct}
+            fitem = item.get("file_item", {})
+            media = fitem.get("media", {})
+            file_url = media.get("full_url", "")
+            file_name = fitem.get("file_name", "unknown")
+            file_size = int(fitem.get("len", 0))
+            aeskey_b64 = media.get("aes_key", "")
+            print(f"\n [{fu[:20]}]: [文件] {file_name} ({file_size//1024}KB)", flush=True)
+            await sendmsg(client, tok, fu, f"收到文件: {file_name} ({file_size//1024}KB)\n下载解密中...", ct)
+            file_path = Path(IMAGES_DIR) / "files" / file_name
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                r = await client.get(file_url, timeout=60)
+                if r.status_code != 200:
+                    await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
+                    continue
+                data = r.content
+                # AES 解密（同图片）
+                if aeskey_b64:
+                    try:
+                        # aes_key 是 base64(hex_string)，需两次解码
+                        hex_str = base64.b64decode(aeskey_b64).decode("ascii")
+                        key = bytes.fromhex(hex_str)
+                        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                        # 先 ECB 后 CBC（同图片逻辑）
+                        for mode_desc, cipher in [
+                            ("ECB", Cipher(algorithms.AES(key), modes.ECB())),
+                            ("CBC", Cipher(algorithms.AES(key), modes.CBC(bytes(16)))),
+                        ]:
+                            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
+                            if d[:2] == b'PK':  # ZIP/docx header
+                                pad = d[-1]
+                                if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
+                                    data = d[:-pad]; break
+                                data = d; break
+                        else:
+                            data = d  # fallback
+                    except ImportError:
+                        pass
+                file_path.write_bytes(data)
+                pending_image_path = str(file_path)
+                pending_is_file = True
+                awaiting_image_action = True
+                await sendmsg(client, tok, fu,
+                    f"文件已保存 ({len(data)//1024}KB)\n\n回复 /yes 仅注入路径\n回复其他内容一并注入", ct)
+            except Exception as e:
+                await sendmsg(client, tok, fu, f"处理失败: {e}", ct)
+            continue
+        if item_type != 1: continue
         text = item.get("text_item", {}).get("text", "").strip()
         if not text: continue
 
         print(f"\n [{fu[:20]}]: {text[:120]}")
         last_user = {"to_user": fu, "ctx_token": ct}
         LAST_USER_FILE.write_text(json.dumps(last_user), encoding="utf-8")
+
+        # ── 会话选择模式：检测纯数字回复 ──
+        if awaiting_session_select and text.strip().isdigit():
+            num = int(text.strip())
+            if 0 <= num <= 12:
+                awaiting_session_select = False
+                if num == 0:
+                    select_session(0)
+                    await sendmsg(client, tok, fu, "已取消", ct)
+                    continue
+                print(f"   选择会话 #{num}...", end="", flush=True)
+                select_session(num)
+                time.sleep(3)
+                set_locked_jsonl(None)
+                last_reply = get_last_reply()
+                print(f" 切换 #{num}, reply={len(last_reply)}chars", flush=True)
+                if last_reply:
+                    await sendmsg(client, tok, fu,
+                        f"已切换到会话 #{num}\n\n上次回复：\n{last_reply[:1200]}", ct)
+                else:
+                    await sendmsg(client, tok, fu, f"已切换到会话 #{num}（无历史回复）", ct)
+                continue
+
+        # ── 图片/文件附带文字模式 ──
+        if awaiting_image_action:
+            awaiting_image_action = False
+            t = text.strip().lower()
+            label = "文件" if pending_is_file else "图片"
+            safe_path = pending_image_path.replace("\\", "/")
+            if t.startswith("/yes") or t.startswith("/y"):
+                msg = f"收到一份微信{label}，已保存至 {safe_path}"
+                inject_to_terminal(msg)
+                print(f" {label}路径已注入，等待Claude回复...", flush=True)
+                jsonl = sessions_jsonl()
+                sp = jsonl.stat().st_size if jsonl else 0
+                reply = await wait_reply(jsonl, msg, sp, phase1_timeout=120)
+                if reply:
+                    await sendmsg(client, tok, fu, reply, ct)
+                continue
+            # 其他回复 → 路径 + 文字一起注入
+            inject_to_terminal(f"[微信{label}: {safe_path}]\n\n{text}")
+            print(f" {label}+文字已注入，等待Claude回复...", flush=True)
+            jsonl = sessions_jsonl()
+            sp = jsonl.stat().st_size if jsonl else 0
+            reply = await wait_reply(jsonl, text, sp)
+            if reply:
+                await sendmsg(client, tok, fu, reply, ct)
+            continue
 
         # 审核模式：只有以 /yes 或 /no 开头的消息才当审核处理
         if pending_approval and text.strip().lower().startswith(("/yes", "/no", "/y", "/n")):
@@ -412,7 +403,51 @@ async def handle(client, tok, raw):
             # 不是审核回复，清掉标记正常处理
             pending_approval = False
 
-        jsonl = _jsonl()
+        # 远程命令：注入终端 + 返回输出
+        if _is_remote_cmd(text):
+            print("   远程命令...", end="", flush=True)
+            note = ""
+            # 本地命令（不注入终端）
+            if text.strip().lower().startswith("/stop"):
+                send_interrupt()
+                output = "已发送中断信号"
+                note = "stop"
+            elif text.strip().lower().startswith("/imageloc"):
+                parts = text.strip().split(maxsplit=1)
+                if len(parts) > 1:
+                    new_path = Path(parts[1])
+                    new_path.mkdir(parents=True, exist_ok=True)
+                    IMAGES_DIR = new_path
+                    output = f"图片保存路径已设为：{IMAGES_DIR}"
+                else:
+                    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+                    output = f"当前图片保存路径：{IMAGES_DIR}"
+                note = "imageloc"
+            elif text.strip().lower().startswith("/summaries"):
+                on = toggle_summaries()
+                output = f"AI 摘要已{'开启' if on else '关闭'}"
+                note = "toggle"
+            else:
+                inject_to_terminal(text)
+                if text.strip().lower().startswith("/resume"):
+                    cur_sid = sessions_jsonl().stem if sessions_jsonl() else ""
+                    output = "可用会话：\n" + get_session_list(exclude_sid=cur_sid)
+                    output += "\n\n回复 0 取消，回复数字选择会话"
+                    awaiting_session_select = True
+                    note = "ai"
+                else:
+                    output = f"已执行 {text}"
+                    note = "ok"
+            try:
+                ok = await sendmsg(client, tok, fu, output[:1500], ct)
+                msg = "OK" if ok else "FAIL"
+                print(f" {msg}", flush=True)
+            except Exception as e:
+                msg = f"ERR:{e}"
+                print(f" {msg}", flush=True)
+            continue
+
+        jsonl = sessions_jsonl()
         sp = jsonl.stat().st_size if jsonl else 0
 
         print("   注入...", end="", flush=True)
@@ -437,11 +472,10 @@ async def main():
     print("=" * 36)
 
     # session lock（仅当显式指定 --session 时才锁定）
-    global LOCKED_JSONL
     if args.session:
         j = SESSION_DIR / f"{args.session}.jsonl"
         if j.exists():
-            LOCKED_JSONL = j
+            set_locked_jsonl(j)
             print(f" 锁定: {args.session}")
         else:
             print(f" [警告] 会话 {args.session} 不存在")
