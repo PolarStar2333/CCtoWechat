@@ -211,17 +211,11 @@ pending_is_file = False          # True=文件, False=图片
 
 IMAGES_DIR = ROOT / "images"  # 默认保存位置
 
-REMOTE_COMMANDS = {
-    "/resume", "/clear", "/compact", "/status", "/cost", "/model",
-    "/doctor", "/init", "/config", "/help", "/todos", "/summaries",
-    "/imageloc", "/stop",
-}
+LOCAL_COMMANDS = {"/summaries", "/imageloc", "/stop"}
+
 def _is_remote_cmd(text):
-    t = text.strip().lower()
-    for cmd in REMOTE_COMMANDS:
-        if t == cmd or t.startswith(cmd + " "):
-            return True
-    return False
+    """所有 / 开头都是远程命令"""
+    return text.strip().startswith("/")
 
 async def handle(client, tok, raw):
     global last_user, pending_approval, awaiting_session_select, IMAGES_DIR
@@ -403,48 +397,51 @@ async def handle(client, tok, raw):
             # 不是审核回复，清掉标记正常处理
             pending_approval = False
 
-        # 远程命令：注入终端 + 返回输出
+        # 远程命令：所有 / 开头直接穿透给终端
         if _is_remote_cmd(text):
             print("   远程命令...", end="", flush=True)
-            note = ""
-            # 本地命令（不注入终端）
-            if text.strip().lower().startswith("/stop"):
+            cmd = text.strip().lower()
+            # ── CCtoWechat 本地命令（不注入终端）──
+            if cmd.startswith("/stop"):
                 send_interrupt()
-                output = "已发送中断信号"
-                note = "stop"
-            elif text.strip().lower().startswith("/imageloc"):
+                await sendmsg(client, tok, fu, "已发送中断信号", ct)
+                continue
+            if cmd.startswith("/imageloc"):
                 parts = text.strip().split(maxsplit=1)
                 if len(parts) > 1:
-                    new_path = Path(parts[1])
-                    new_path.mkdir(parents=True, exist_ok=True)
+                    new_path = Path(parts[1]); new_path.mkdir(parents=True, exist_ok=True)
                     IMAGES_DIR = new_path
-                    output = f"图片保存路径已设为：{IMAGES_DIR}"
+                    out = f"图片保存路径已设为：{IMAGES_DIR}"
                 else:
                     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-                    output = f"当前图片保存路径：{IMAGES_DIR}"
-                note = "imageloc"
-            elif text.strip().lower().startswith("/summaries"):
+                    out = f"当前图片保存路径：{IMAGES_DIR}"
+                await sendmsg(client, tok, fu, out, ct)
+                continue
+            if cmd.startswith("/summaries"):
                 on = toggle_summaries()
-                output = f"AI 摘要已{'开启' if on else '关闭'}"
-                note = "toggle"
-            else:
+                await sendmsg(client, tok, fu, f"AI 摘要已{'开启' if on else '关闭'}", ct)
+                continue
+            # ── /resume 特殊处理 ──
+            if cmd.startswith("/resume"):
                 inject_to_terminal(text)
-                if text.strip().lower().startswith("/resume"):
-                    cur_sid = sessions_jsonl().stem if sessions_jsonl() else ""
-                    output = "可用会话：\n" + get_session_list(exclude_sid=cur_sid)
-                    output += "\n\n回复 0 取消，回复数字选择会话"
-                    awaiting_session_select = True
-                    note = "ai"
-                else:
-                    output = f"已执行 {text}"
-                    note = "ok"
-            try:
-                ok = await sendmsg(client, tok, fu, output[:1500], ct)
-                msg = "OK" if ok else "FAIL"
-                print(f" {msg}", flush=True)
-            except Exception as e:
-                msg = f"ERR:{e}"
-                print(f" {msg}", flush=True)
+                cur_sid = sessions_jsonl().stem if sessions_jsonl() else ""
+                out = "可用会话：\n" + get_session_list(exclude_sid=cur_sid)
+                out += "\n\n回复 0 取消，回复数字选择会话"
+                awaiting_session_select = True
+                await sendmsg(client, tok, fu, out[:1500], ct)
+                continue
+            # ── 通用命令穿透：注入 → 等 Claude 回复 → 发回 ──
+            inject_to_terminal(text)
+            jsonl = sessions_jsonl()
+            sp = jsonl.stat().st_size if jsonl else 0
+            print(" 等待回复...", end="", flush=True)
+            reply = await wait_reply(jsonl, text, sp, phase1_timeout=120)
+            if reply:
+                ok = await sendmsg(client, tok, fu, reply[:1500], ct)
+                print(" OK" if ok else " FAIL", flush=True)
+            else:
+                await sendmsg(client, tok, fu, f"已执行 {text}", ct)
+                print(" 超时", flush=True)
             continue
 
         jsonl = sessions_jsonl()
