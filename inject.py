@@ -17,7 +17,8 @@ _OSX = os.uname().sysname == "Darwin" if hasattr(os, "uname") else False
 def _clip_fallback(text):
     if _WIN:
         try:
-            subprocess.run(["clip"], input=text.encode("utf-16-le", errors="replace"), check=False)
+            # utf-16 带 BOM，Windows clip 命令需要
+            subprocess.run(["clip"], input=text.encode("utf-16", errors="replace"), check=False)
         except Exception:
             pass
     elif _OSX:
@@ -98,9 +99,89 @@ def select_session(num):
         _inject_keys(*([VK_DOWN] * (num - 1) + [VK_RET]))
 
 
-# ── 文本注入（剪贴板 + 粘贴）──
-def _inject_win(text):
+# ── 文本注入 ──
+def _make_input_structs():
+    """构建 INPUT 等结构体（复用，避免重复定义）"""
+    from ctypes import wintypes
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                    ("dwExtraInfo", wintypes.WPARAM)]
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", wintypes.WPARAM)]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD),
+                    ("wParamH", wintypes.WORD)]
+
+    class INPUT_UNION(ctypes.Union):
+        _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
+
+    return INPUT, INPUT_UNION, KEYBDINPUT
+
+
+def _inject_win_sendinput(text):
+    """SendInput 模拟 Ctrl+V 粘贴（利用剪贴板原子性，多行不被打断）"""
     user32 = ctypes.windll.user32
+    VK_CTRL, VK_V, VK_RET, KEYUP = 0x11, 0x56, 0x0D, 0x0002
+
+    # 1) 写剪贴板（pyperclip 处理编码，回退 clip 命令带 BOM）
+    if pyperclip is not None:
+        try:
+            pyperclip.copy(text)
+        except Exception:
+            _clip_fallback(text)
+    else:
+        _clip_fallback(text)
+    time.sleep(0.2)
+
+    # 2) Ctrl+V 粘贴（SendInput 模拟，绕过终端粘贴警告）
+    inputs = []
+    INPUT, _, _ = _make_input_structs()
+    INPUT_KEYBOARD = 1
+
+    # Ctrl down
+    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp.u.ki.wVk = VK_CTRL
+    inputs.append(inp)
+    # V down
+    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp.u.ki.wVk = VK_V
+    inputs.append(inp)
+    time.sleep(0.05)
+    # V up
+    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp.u.ki.wVk = VK_V; inp.u.ki.dwFlags = KEYUP
+    inputs.append(inp)
+    # Ctrl up
+    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp.u.ki.wVk = VK_CTRL; inp.u.ki.dwFlags = KEYUP
+    inputs.append(inp)
+
+    INPUT_ARRAY = INPUT * len(inputs)
+    sent = user32.SendInput(len(inputs), INPUT_ARRAY(*inputs), ctypes.sizeof(INPUT))
+    if sent < len(inputs):
+        raise OSError(f"仅发送 {sent}/{len(inputs)}")
+
+    # 3) 等粘贴完成，回车提交
+    time.sleep(0.4)
+    user32.keybd_event(VK_RET, 0, 0, 0); time.sleep(0.05)
+    user32.keybd_event(VK_RET, 0, KEYUP, 0)
+    return True
+
+
+def _inject_win_clipboard(text):
+    """剪贴板 + Ctrl+V 注入（回退方案）"""
+    user32 = ctypes.windll.user32
+    _clip_fallback(text)
+    time.sleep(0.15)
     VK_CTRL, VK_V, VK_RET, KEYUP = 0x11, 0x56, 0x0D, 0x0002
     user32.keybd_event(VK_CTRL, 0, 0, 0)
     user32.keybd_event(VK_V, 0, 0, 0); time.sleep(0.03)
@@ -110,6 +191,15 @@ def _inject_win(text):
     user32.keybd_event(VK_RET, 0, 0, 0); time.sleep(0.05)
     user32.keybd_event(VK_RET, 0, KEYUP, 0)
     return True
+
+
+def _inject_win(text):
+    """Windows 文本注入：优先 SendInput，失败回退剪贴板"""
+    try:
+        return _inject_win_sendinput(text)
+    except Exception as e:
+        print(f"    [SendInput 失败，回退剪贴板: {e}]", flush=True)
+        return _inject_win_clipboard(text)
 
 
 def _inject_osx(text):
@@ -132,7 +222,12 @@ def _inject_linux(text):
 
 
 def inject_to_terminal(text):
-    """将文本注入当前活动终端（剪贴板 → 粘贴 → 回车）"""
+    """将文本注入当前活动终端"""
+    # Windows: 写剪贴板 + SendInput Ctrl+V 粘贴（多行原子操作）
+    if _WIN:
+        return _inject_win(text)
+
+    # macOS / Linux: 剪贴板 + 粘贴
     if pyperclip is not None:
         try:
             pyperclip.copy(text)
@@ -142,9 +237,7 @@ def inject_to_terminal(text):
         _clip_fallback(text)
     time.sleep(0.15)
 
-    if _WIN:
-        return _inject_win(text)
-    elif _OSX:
+    if _OSX:
         return _inject_osx(text)
     else:
         return _inject_linux(text)

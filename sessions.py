@@ -251,6 +251,141 @@ async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
         await asyncio.sleep(1)
 
 
+# ── 会话统计（/status /usage /cost 用）──
+
+# 标准 Claude 模型定价 ($/M tokens)，自定义模型返回 None
+MODEL_PRICING = {
+    "claude-opus": (15, 75),
+    "claude-sonnet": (3, 15),
+    "claude-haiku": (0.8, 4),
+    "claude-haiku-4": (0.8, 4),
+}
+
+
+def _get_pricing(model_name):
+    """根据模型名查找定价 (input_price, output_price) 或 None"""
+    if not model_name:
+        return None
+    m = model_name.lower()
+    for prefix, prices in MODEL_PRICING.items():
+        if m.startswith(prefix) or prefix in m:
+            return prices
+    return None
+
+
+def get_session_stats(jsonl_path=None):
+    """从 JSONL 统计 token 用量，返回 dict 或 None"""
+    if jsonl_path is None:
+        jsonl_path = _jsonl()
+    if not jsonl_path or not jsonl_path.exists():
+        return None
+
+    stats = {
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "model": None,
+        "message_count": 0,
+        "session_id": jsonl_path.stem,
+    }
+
+    try:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                msg = d.get("message") or {}
+                if msg.get("role") == "assistant":
+                    stats["message_count"] += 1
+                    if not stats["model"]:
+                        stats["model"] = msg.get("model", "")
+                    usage = msg.get("usage", {})
+                    for k in ["input_tokens", "cache_creation_input_tokens",
+                              "cache_read_input_tokens", "output_tokens"]:
+                        stats[k] += usage.get(k, 0)
+    except Exception:
+        return None
+
+    return stats
+
+
+def format_stats(stats):
+    """格式化会话统计为可读文本"""
+    if not stats:
+        return "无法读取会话统计"
+
+    model = stats["model"] or "未知"
+    sid = stats["session_id"][:12] if stats["session_id"] else "?"
+    total_in = stats["input_tokens"] + stats["cache_read_input_tokens"] + stats["cache_creation_input_tokens"]
+    total_out = stats["output_tokens"]
+
+    lines = [
+        f"会话: {sid}",
+        f"模型: {model}",
+        f"消息数: {stats['message_count']}",
+        f"输入 tokens: {total_in:,}",
+        f"输出 tokens: {total_out:,}",
+        f"合计 tokens: {total_in + total_out:,}",
+    ]
+
+    pricing = _get_pricing(model)
+    if pricing:
+        in_price, out_price = pricing
+        cost = (total_in / 1_000_000) * in_price + (total_out / 1_000_000) * out_price
+        lines.append(f"预估费用: ${cost:.4f}")
+    else:
+        lines.append("费用: 自定义模型，无法估算")
+
+    return "\n".join(lines)
+
+
+def format_usage(stats):
+    """格式化 token 用量详情"""
+    if not stats:
+        return "无法读取用量"
+
+    model = stats["model"] or "未知"
+    return "\n".join([
+        f"模型: {model}",
+        f"会话: {stats['session_id'][:12]}",
+        f"",
+        f"输入 tokens: {stats['input_tokens']:,}",
+        f"缓存读取 tokens: {stats['cache_read_input_tokens']:,}",
+        f"缓存创建 tokens: {stats['cache_creation_input_tokens']:,}",
+        f"输出 tokens: {stats['output_tokens']:,}",
+        f"合计: {sum(stats[k] for k in ['input_tokens','cache_read_input_tokens','cache_creation_input_tokens','output_tokens']):,}",
+    ])
+
+
+def format_cost(stats):
+    """格式化费用估算"""
+    if not stats:
+        return "无法计算费用"
+
+    model = stats["model"] or "未知"
+    total_in = stats["input_tokens"] + stats["cache_read_input_tokens"] + stats["cache_creation_input_tokens"]
+    total_out = stats["output_tokens"]
+
+    pricing = _get_pricing(model)
+    if not pricing:
+        return f"模型 {model} 为自定义模型，无法自动计算费用\n输入: {total_in:,} tokens\n输出: {total_out:,} tokens"
+
+    in_price, out_price = pricing
+    in_cost = (total_in / 1_000_000) * in_price
+    out_cost = (total_out / 1_000_000) * out_price
+    total_cost = in_cost + out_cost
+
+    return "\n".join([
+        f"模型: {model}",
+        f"输入: {total_in:,} tokens × ${in_price}/M = ${in_cost:.4f}",
+        f"输出: {total_out:,} tokens × ${out_price}/M = ${out_cost:.4f}",
+        f"合计费用: ${total_cost:.4f}",
+    ])
+
+
 def find_session_dir():
     """自动探测 Claude Code 项目目录"""
     base = Path.home() / ".claude" / "projects"

@@ -15,13 +15,14 @@ CCtoWechat — Claude Code 接入个人微信
 平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
-import argparse, asyncio, httpx, json, base64, random, time, traceback
+import argparse, asyncio, httpx, json, base64, random, time, traceback, re
 from pathlib import Path
 
 from inject import inject_to_terminal, select_session, send_interrupt
 from sessions import (init as sessions_init, set_locked_jsonl,
                       get_session_list, get_last_reply, wait_reply,
-                      find_session_dir, toggle_summaries, _jsonl as sessions_jsonl)
+                      find_session_dir, toggle_summaries, _jsonl as sessions_jsonl,
+                      get_session_stats, format_stats, format_usage, format_cost)
 
 API_BASE = "https://ilinkai.weixin.qq.com"
 CH_VERSION = "1.0.2"
@@ -204,24 +205,29 @@ async def check_approval():
         await asyncio.sleep(1)
 
 # ── 消息 ──
-awaiting_session_select = False  # /resume 后等待用户选号
-awaiting_model_select = False    # /model 后等待用户选号
-_model_map = {}                   # 编号 -> 别名 映射
-awaiting_image_action = False    # 发图/文件后等待 /yes /no
-pending_image_path = ""          # 待处理的文件路径
-pending_is_file = False          # True=文件, False=图片
+awaiting_session_select = False     # /resume 后等待用户选号
+awaiting_model_select = False       # /model 后等待用户选号
+_model_map = {}                      # 编号 -> 别名 映射
+awaiting_permissions_select = False  # /permissions 后等待选号
+_permissions_map = {}                 # 编号 -> 模式名 映射
+awaiting_image_action = False       # 发图/文件后等待 /yes /no
+pending_image_path = ""             # 待处理的文件路径
+pending_is_file = False             # True=文件, False=图片
 
 IMAGES_DIR = ROOT / "images"  # 默认保存位置
 
-LOCAL_COMMANDS = {"/summaries", "/imageloc", "/stop"}
-
 def _is_remote_cmd(text):
-    """所有 / 开头都是远程命令"""
-    return text.strip().startswith("/")
+    """只匹配纯英文 slash 命令（/字母开头，不含中文等非ASCII）"""
+    t = text.strip()
+    if not t.startswith("/"):
+        return False
+    first = t.split()[0].lower() if t.strip() else ""
+    return bool(re.match(r'^/[a-zA-Z][a-zA-Z0-9_-]*$', first))
 
 async def handle(client, tok, raw):
     global last_user, pending_approval, awaiting_session_select, awaiting_model_select, _model_map, IMAGES_DIR
     global awaiting_image_action, pending_image_path, pending_is_file
+    global awaiting_permissions_select, _permissions_map
     if isinstance(raw, str):
         try: msg = json.loads(raw)
         except: return
@@ -352,6 +358,24 @@ async def handle(client, tok, raw):
                 await sendmsg(client, tok, fu, f"已切换至 {alias}，查看终端确认", ct)
             continue
 
+        # ── 权限模式选择 ──
+        if awaiting_permissions_select and text.strip().isdigit():
+            num = int(text.strip())
+            awaiting_permissions_select = False
+            if num == 0 or num not in _permissions_map:
+                await sendmsg(client, tok, fu, "已取消", ct)
+            else:
+                mode = _permissions_map[num]
+                sp = Path.home() / ".claude" / "settings.local.json"
+                try:
+                    sp_data = json.loads(sp.read_text(encoding="utf-8")) if sp.exists() else {}
+                except:
+                    sp_data = {}
+                sp_data["permissionMode"] = mode
+                sp.write_text(json.dumps(sp_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                await sendmsg(client, tok, fu, f"权限模式已切换至: {mode}", ct)
+            continue
+
         # ── 会话选择模式：检测纯数字回复 ──
         if awaiting_session_select and text.strip().isdigit():
             num = int(text.strip())
@@ -448,6 +472,165 @@ async def handle(client, tok, raw):
                     model_map[i] = alias
                 _model_map = model_map
                 awaiting_model_select = True
+                await sendmsg(client, tok, fu, out, ct)
+                continue
+            if cmd.startswith("/status"):
+                try:
+                    s = get_session_stats()
+                    out = format_stats(s)
+                    await sendmsg(client, tok, fu, out, ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/status 失败: {e}", ct)
+                continue
+            if cmd.startswith("/usage"):
+                try:
+                    s = get_session_stats()
+                    out = format_usage(s)
+                    await sendmsg(client, tok, fu, out, ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/usage 失败: {e}", ct)
+                continue
+            if cmd.startswith("/cost"):
+                try:
+                    s = get_session_stats()
+                    out = format_cost(s)
+                    await sendmsg(client, tok, fu, out, ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/cost 失败: {e}", ct)
+                continue
+            if cmd.startswith("/permissions"):
+                try:
+                    parts = text.strip().split(maxsplit=1)
+                    sp = Path.home() / ".claude" / "settings.local.json"
+                    if not sp.exists():
+                        sp.write_text("{}", encoding="utf-8")
+                    try:
+                        sp_data = json.loads(sp.read_text(encoding="utf-8"))
+                        perm = sp_data.get("permissions", {})
+                    except:
+                        sp_data = {}; perm = {}
+                    allow = perm.get("allow", [])
+                    deny = perm.get("deny", [])
+                    cur_mode = sp_data.get("permissionMode", "default")
+
+                    MODES = [
+                        ("default", "每次询问权限"),
+                        ("auto", "自动接受安全操作"),
+                        ("acceptEdits", "自动接受编辑"),
+                        ("bypassPermissions", "绕过所有权限"),
+                        ("plan", "仅规划模式"),
+                        ("dontAsk", "不询问"),
+                    ]
+                    MODE_MAP = {m[0]: m[1] for m in MODES}
+
+                    if len(parts) > 1:
+                        # /permissions <mode> — 直接切换
+                        arg = parts[1].strip().lower()
+                        matched = None
+                        for m, _ in MODES:
+                            if m.lower() == arg or m.lower().startswith(arg):
+                                matched = m; break
+                        if matched:
+                            sp_data["permissionMode"] = matched
+                            sp.write_text(json.dumps(sp_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                            await sendmsg(client, tok, fu, f"权限模式已切换至: {matched} ({MODE_MAP[matched]})", ct)
+                        else:
+                            await sendmsg(client, tok, fu, f"未知模式: {arg}\n可用: {', '.join(m[0] for m in MODES)}", ct)
+                    else:
+                        # /permissions — 显示当前状态 + 模式列表
+                        lines = [f"当前权限模式: {cur_mode} ({MODE_MAP.get(cur_mode, '?')})"]
+                        if allow:
+                            lines.append(f"\n允许 ({len(allow)}): {', '.join(allow[:8])}")
+                            if len(allow) > 8:
+                                lines.append(f"  ... 还有 {len(allow)-8} 项")
+                        if deny:
+                            lines.append(f"\n禁止 ({len(deny)}): {', '.join(deny[:8])}")
+                        lines.append("\n切换模式（回复数字）：\n0. 取消")
+                        for i, (m, desc) in enumerate(MODES, 1):
+                            mk = " ← 当前" if m == cur_mode else ""
+                            lines.append(f"{i}. {m} - {desc}{mk}")
+                        out = "\n".join(lines)
+                        _perm_mode_map = {i: m for i, (m, _) in enumerate(MODES, 1)}
+                        _perm_mode_map[0] = None
+                        awaiting_permissions_select = True
+                        _permissions_map = _perm_mode_map
+                        await sendmsg(client, tok, fu, out, ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/permissions 失败: {e}", ct)
+                continue
+            if cmd.startswith("/agents"):
+                try:
+                    import subprocess, shutil
+                    claude = shutil.which("claude") or "claude"
+                    proc = subprocess.run([claude, "agents"], capture_output=True,
+                                          text=True, timeout=10, encoding="utf-8")
+                    out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
+                    await sendmsg(client, tok, fu, out, ct)
+                except FileNotFoundError:
+                    await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/agents 失败: {e}", ct)
+                continue
+            if cmd.startswith("/plugins"):
+                try:
+                    import subprocess, shutil
+                    claude = shutil.which("claude") or "claude"
+                    proc = subprocess.run([claude, "plugin", "list"], capture_output=True,
+                                          text=True, timeout=10, encoding="utf-8")
+                    out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
+                    await sendmsg(client, tok, fu, out, ct)
+                except FileNotFoundError:
+                    await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/plugins 失败: {e}", ct)
+                continue
+            if cmd.startswith("/mcp"):
+                try:
+                    import subprocess, shutil
+                    claude = shutil.which("claude") or "claude"
+                    proc = subprocess.run([claude, "mcp", "list"], capture_output=True,
+                                          text=True, timeout=10, encoding="utf-8")
+                    out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
+                    await sendmsg(client, tok, fu, out, ct)
+                except FileNotFoundError:
+                    await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
+                except Exception as e:
+                    traceback.print_exc()
+                    await sendmsg(client, tok, fu, f"/mcp 失败: {e}", ct)
+                continue
+            if cmd.startswith("/help"):
+                out = """CCtoWechat 命令
+
+== 统计 ==
+/status — 会话统计（模型、tokens）
+/usage  — token 用量详情
+/cost   — 费用估算
+
+== 会话 ==
+/resume  — 会话列表 + 选号切换
+/clear   — 清空上下文
+/compact — 压缩上下文
+
+== 配置 ==
+/model       — 查看/切换模型
+/permissions — 查看/切换权限模式
+/agents      — 查看可用 agent
+/plugins     — 已安装插件
+/mcp         — MCP 服务器
+
+== 控制 ==
+/stop — 中断 Claude 当前操作
+/summaries — 开关 AI 会话摘要
+/imageloc [路径] — 图片保存路径
+
+== 其他 ==
+/help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
             if cmd.startswith("/summaries"):
