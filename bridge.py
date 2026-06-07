@@ -205,6 +205,8 @@ async def check_approval():
 
 # ── 消息 ──
 awaiting_session_select = False  # /resume 后等待用户选号
+awaiting_model_select = False    # /model 后等待用户选号
+_model_map = {}                   # 编号 -> 别名 映射
 awaiting_image_action = False    # 发图/文件后等待 /yes /no
 pending_image_path = ""          # 待处理的文件路径
 pending_is_file = False          # True=文件, False=图片
@@ -218,7 +220,7 @@ def _is_remote_cmd(text):
     return text.strip().startswith("/")
 
 async def handle(client, tok, raw):
-    global last_user, pending_approval, awaiting_session_select, IMAGES_DIR
+    global last_user, pending_approval, awaiting_session_select, awaiting_model_select, _model_map, IMAGES_DIR
     global awaiting_image_action, pending_image_path, pending_is_file
     if isinstance(raw, str):
         try: msg = json.loads(raw)
@@ -338,6 +340,18 @@ async def handle(client, tok, raw):
         last_user = {"to_user": fu, "ctx_token": ct}
         LAST_USER_FILE.write_text(json.dumps(last_user), encoding="utf-8")
 
+        # ── 模型选择模式 ──
+        if awaiting_model_select and text.strip().isdigit():
+            num = int(text.strip())
+            awaiting_model_select = False
+            if num == 0 or num not in _model_map:
+                await sendmsg(client, tok, fu, "已取消", ct)
+            else:
+                alias = _model_map[num]
+                inject_to_terminal(f"/model {alias}")
+                await sendmsg(client, tok, fu, f"已切换至 {alias}，查看终端确认", ct)
+            continue
+
         # ── 会话选择模式：检测纯数字回复 ──
         if awaiting_session_select and text.strip().isdigit():
             num = int(text.strip())
@@ -415,6 +429,25 @@ async def handle(client, tok, raw):
                 else:
                     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
                     out = f"当前图片保存路径：{IMAGES_DIR}"
+                await sendmsg(client, tok, fu, out, ct)
+                continue
+            if cmd == "/model":
+                import os
+                sp = Path.home() / ".claude" / "settings.json"
+                cur_alias = "sonnet"
+                if sp.exists():
+                    try: cur_alias = json.loads(sp.read_text()).get("model", "sonnet")
+                    except: pass
+                cur_full = os.environ.get("ANTHROPIC_MODEL", cur_alias)
+                out = f"当前: {cur_alias} ({cur_full})\n\n模型列表：\n0. 取消\n"
+                model_map = {0: None}
+                for i, (alias, label) in enumerate([("opus","Opus"),("sonnet","Sonnet"),("haiku","Haiku")], 1):
+                    full = os.environ.get(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL", alias)
+                    mk = " ← 当前" if cur_alias.lower() == alias.lower() else ""
+                    out += f"{i}. {label}: {full}{mk}\n"
+                    model_map[i] = alias
+                _model_map = model_map
+                awaiting_model_select = True
                 await sendmsg(client, tok, fu, out, ct)
                 continue
             if cmd.startswith("/summaries"):
