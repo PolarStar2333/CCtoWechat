@@ -19,6 +19,7 @@ import argparse, asyncio, httpx, json, base64, random, time, traceback, re, logg
 from pathlib import Path
 
 from logger_setup import setup_logging, get_logger
+from config import CONFIG
 from inject import inject_to_terminal, select_session, send_interrupt
 from sessions import (init as sessions_init, set_locked_jsonl,
                       get_session_list, get_last_reply, wait_reply,
@@ -27,8 +28,8 @@ from sessions import (init as sessions_init, set_locked_jsonl,
 
 logger = logging.getLogger("bridge")
 
-API_BASE = "https://ilinkai.weixin.qq.com"
-CH_VERSION = "1.0.2"
+API_BASE = CONFIG["api_base"]
+CH_VERSION = CONFIG["channel_version"]
 
 ROOT = Path(__file__).parent
 CRED_FILE = ROOT / "credentials.json"
@@ -49,12 +50,12 @@ def _hdrs(tok):
 
 # ── iLink ──
 async def get_bot_qrcode():
-    async with httpx.AsyncClient(timeout=15, proxy=None, trust_env=False) as c:
+    async with httpx.AsyncClient(timeout=CONFIG["timeouts"]["short"], proxy=None, trust_env=False) as c:
         r = await c.get(f"{API_BASE}/ilink/bot/get_bot_qrcode", params={"bot_type": 3})
         return r.json()["qrcode"], r.json().get("qrcode_img_content", "")
 
 async def wait_qrcode_scan(qrcode):
-    async with httpx.AsyncClient(timeout=42) as c:
+    async with httpx.AsyncClient(timeout=CONFIG["timeouts"]["long_poll"]) as c:
         try:
             r = await c.get(f"{API_BASE}/ilink/bot/get_qrcode_status",
                             params={"qrcode": qrcode}, headers={"iLink-App-ClientVersion": "1"})
@@ -77,18 +78,18 @@ async def login():
             return creds
         if s == "expired":
             refresh += 1
-            if refresh >= 3: return None
+            if refresh >= CONFIG["max_qr_refresh"]: return None
             qrcode, qr_url = await get_bot_qrcode()
             print(f"   已刷新({refresh}/3)：\n   {qr_url}")
         elif s == "scaned":
             print("   已扫码，手机上确认...")
-        await asyncio.sleep(1)
+        await asyncio.sleep(CONFIG["poll_interval"])
 
 async def getupdates(client, tok, buf=""):
     try:
         r = await client.post(f"{API_BASE}/ilink/bot/getupdates",
             json={"get_updates_buf": buf, "base_info": {"channel_version": CH_VERSION}},
-            headers=_hdrs(tok), timeout=42)
+            headers=_hdrs(tok), timeout=CONFIG["timeouts"]["long_poll"])
         return r.json()
     except httpx.TimeoutException:
         return {"ret": 0, "msgs": [], "get_updates_buf": buf}
@@ -99,7 +100,7 @@ async def sendmsg(client, tok, to_user, text, ctx_token):
         "msg": {"to_user_id": to_user, "client_id": cid, "message_type": 2,
                 "message_state": 2, "context_token": ctx_token,
                 "item_list": [{"type": 1, "text_item": {"text": text}}]},
-        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=15)
+        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
     return r.status_code == 200
 
 
@@ -120,7 +121,7 @@ async def send_image(client, tok, to_user, ctx_token, image_bytes):
     # 2) 获取 CDN 上传 URL
     r = await client.post(f"{API_BASE}/ilink/bot/getuploadurl",
         json={"base_info": {"channel_version": CH_VERSION}},
-        headers=_hdrs(tok), timeout=15)
+        headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
     if r.status_code != 200:
         return False
     up_info = r.json()
@@ -130,7 +131,7 @@ async def send_image(client, tok, to_user, ctx_token, image_bytes):
         return False
 
     # 3) 上传加密图片到 CDN
-    r2 = await client.put(upload_url, content=encrypted, timeout=30)
+    r2 = await client.put(upload_url, content=encrypted, timeout=CONFIG["timeouts"]["upload"])
     if r2.status_code not in (200, 204):
         return False
 
@@ -145,7 +146,7 @@ async def send_image(client, tok, to_user, ctx_token, image_bytes):
                     "cdn_url": cdn_url,
                     "width": 0, "height": 0,
                 }}]},
-        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=15)
+        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
     return r3.status_code == 200
 
 # ── HTTP /send ──
@@ -179,12 +180,14 @@ async def http_handler(reader, writer):
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"); await writer.drain(); writer.close()
 
 async def start_http():
-    srv = await asyncio.start_server(http_handler, "127.0.0.1", 9876)
-    print(" HTTP: http://127.0.0.1:9876")
+    srv = await asyncio.start_server(http_handler, CONFIG["http_host"], CONFIG["http_port"])
+    print(f" HTTP: http://{CONFIG['http_host']}:{CONFIG['http_port']}")
     return srv
 
 # ── 思考中通知 ──
-async def _wait_with_think(client, tok, fu, ct, jsonl, text, sp, notify_after=30, **kw):
+async def _wait_with_think(client, tok, fu, ct, jsonl, text, sp, notify_after=None, **kw):
+    if notify_after is None:
+        notify_after = CONFIG["thinking_notify_after"]
     """等待 Claude 回复，超过 notify_after 秒给微信发'思考中'，缓解长时间无响应"""
     notified = False
     async def notify():
@@ -232,7 +235,7 @@ awaiting_image_action = False       # 发图/文件后等待 /yes /no
 pending_image_path = ""             # 待处理的文件路径
 pending_is_file = False             # True=文件, False=图片
 
-IMAGES_DIR = ROOT / "images"  # 默认保存位置
+IMAGES_DIR = ROOT / CONFIG["images_dir"]  # 默认保存位置
 
 def _is_remote_cmd(text):
     """只匹配纯英文 slash 命令（/字母开头，不含中文等非ASCII）"""
@@ -269,7 +272,7 @@ async def handle(client, tok, raw):
             img_path = IMAGES_DIR / f"{int(time.time())}.jpg"
             img_path.parent.mkdir(exist_ok=True)
             try:
-                r = await client.get(img_url, timeout=30)
+                r = await client.get(img_url, timeout=CONFIG["timeouts"]["download"])
                 if r.status_code != 200:
                     await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
                     continue
@@ -322,7 +325,7 @@ async def handle(client, tok, raw):
             file_path = Path(IMAGES_DIR) / "files" / file_name
             file_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                r = await client.get(file_url, timeout=60)
+                r = await client.get(file_url, timeout=CONFIG["timeouts"]["download"])
                 if r.status_code != 200:
                     await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
                     continue
@@ -598,7 +601,7 @@ async def handle(client, tok, raw):
                     import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
                     proc = subprocess.run([claude, "agents"], capture_output=True,
-                                          text=True, timeout=10, encoding="utf-8")
+                                          text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
                     out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
                     await sendmsg(client, tok, fu, out, ct)
                 except FileNotFoundError:
@@ -613,7 +616,7 @@ async def handle(client, tok, raw):
                     import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
                     proc = subprocess.run([claude, "plugin", "list"], capture_output=True,
-                                          text=True, timeout=10, encoding="utf-8")
+                                          text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
                     out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
                     await sendmsg(client, tok, fu, out, ct)
                 except FileNotFoundError:
@@ -628,7 +631,7 @@ async def handle(client, tok, raw):
                     import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
                     proc = subprocess.run([claude, "mcp", "list"], capture_output=True,
-                                          text=True, timeout=10, encoding="utf-8")
+                                          text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
                     out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
                     await sendmsg(client, tok, fu, out, ct)
                 except FileNotFoundError:
@@ -762,14 +765,31 @@ async def main():
         asyncio.create_task(check_approval())  # 启动审核监听
         print(" 监听中...\n")
         ec = 0
+        short = CONFIG["retry"]["backoff_short"]
+        long = CONFIG["retry"]["backoff_long"]
+        thresh = CONFIG["retry"]["threshold"]
+        max_ec = CONFIG["retry"]["max_consecutive"]
         while True:
             try:
                 resp = await getupdates(client, tok, buf)
                 errc = resp.get("errcode", resp.get("ret", 0))
                 if errc != 0:
-                    if errc == -14: logger.error("Session 已过期"); CRED_FILE.unlink(missing_ok=True); return
-                    ec += 1; w = 2 if ec < 3 else 30
-                    logger.warning(f"API 错误 errcode={errc} {w}s后重试"); await asyncio.sleep(w); continue
+                    ec += 1
+                    if errc == -14 or ec >= max_ec:
+                        # session 过期或连续错误过多 → 重新登录
+                        CRED_FILE.unlink(missing_ok=True)
+                        logger.warning(f"需要重新登录 (errcode={errc}, 连续错误={ec})")
+                        creds = await login()
+                        if creds is None:
+                            logger.error("重新登录失败，退出")
+                            return
+                        tok = creds["token"]; tok_g = tok
+                        ec = 0
+                        logger.info("重新登录成功")
+                        continue
+                    w = short if ec <= thresh else long
+                    logger.warning(f"API 错误 errcode={errc} {w}s后重试 (连续{ec}次)")
+                    await asyncio.sleep(w); continue
                 ec = 0
                 for msg in resp.get("msgs", []):
                     asyncio.create_task(handle(client, tok, msg))
@@ -777,8 +797,18 @@ async def main():
                 if nb and nb != buf: buf = nb; BUF_FILE.write_text(json.dumps({"buf": nb}))
             except KeyboardInterrupt: print("\n 停止"); break
             except Exception as e:
-                ec += 1; w = 2 if ec < 3 else 30
-                logger.exception(f"主循环异常"); await asyncio.sleep(w)
+                ec += 1; w = short if ec <= thresh else long
+                logger.exception(f"主循环异常 (连续{ec}次)")
+                if ec >= max_ec:
+                    CRED_FILE.unlink(missing_ok=True)
+                    logger.warning("连续异常过多，尝试重新登录")
+                    creds = await login()
+                    if creds is None:
+                        logger.error("重新登录失败，退出")
+                        return
+                    tok = creds["token"]; tok_g = tok
+                    ec = 0; logger.info("重新登录成功")
+                await asyncio.sleep(w)
     srv.close()
 
 if __name__ == "__main__":

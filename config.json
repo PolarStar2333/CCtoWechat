@@ -1,0 +1,30 @@
+{
+  "_comment": "CCtoWechat 配置文件，修改后重启 bridge.py 生效",
+  "api_base": "https://ilinkai.weixin.qq.com",
+  "channel_version": "1.0.2",
+  "http_host": "127.0.0.1",
+  "http_port": 9876,
+  "images_dir": "images",
+  "max_qr_refresh": 3,
+  "poll_interval": 1,
+  "timeouts": {
+    "short": 15,
+    "long_poll": 42,
+    "upload": 30,
+    "download": 60,
+    "subprocess": 10,
+    "wait_reply_phase1": 600
+  },
+  "retry": {
+    "backoff_short": 2,
+    "backoff_long": 30,
+    "threshold": 3,
+    "max_consecutive": 5
+  },
+  "thinking_notify_after": 30,
+  "log": {
+    "max_bytes": 1000000,
+    "backup_count": 5,
+    "console_level": "INFO"
+  }
+}
