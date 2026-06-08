@@ -2,8 +2,10 @@
 # MIT License - Copyright (c) 2026 CCtoWechat
 """会话管理模块：AI 摘要、JSONL 读取、会话列表、回复抓取"""
 
-import asyncio, json, re, time
+import asyncio, json, logging, re, time
 from pathlib import Path
+
+logger = logging.getLogger("sessions")
 
 
 # ── 全局状态（由 bridge.py 初始化）──
@@ -19,6 +21,7 @@ def init(session_dir, root, locked_jsonl=None):
     _session_dir = session_dir
     _root = root
     _locked_jsonl = locked_jsonl
+    logger.debug(f"sessions.init: dir={session_dir}, root={root}, locked={locked_jsonl}")
 
 
 def set_locked_jsonl(path):
@@ -73,6 +76,7 @@ def _read_new(jsonl_path, pos):
             f.seek(max(0, pos))
             return f.readlines(), f.tell()
     except Exception:
+        logger.warning(f"读取JSONL失败: {jsonl_path}")
         return [], pos
 
 
@@ -80,7 +84,9 @@ def _has_user(lines, fragment):
     frag = fragment.strip()[:50]
     for ln in lines:
         try: obj = json.loads(ln)
-        except: continue
+        except:
+            logger.debug(f"跳过非JSON行: {ln[:80]}")
+            continue
         msg = obj.get("message") or obj
         if msg.get("role") == "user" and frag in _text(msg):
             return True
@@ -91,7 +97,9 @@ def _collect_all_text(lines):
     texts = []
     for ln in lines:
         try: obj = json.loads(ln)
-        except: continue
+        except:
+            logger.debug(f"跳过非JSON行(_collect): {ln[:80]}")
+            continue
         msg = obj.get("message") or obj
         if msg.get("role") != "assistant": continue
         if msg.get("stop_reason") in ("end_turn", "tool_use"):
@@ -104,7 +112,9 @@ def _collect_all_text(lines):
 def _find_end_turn(lines):
     for i in range(len(lines) - 1, -1, -1):
         try: obj = json.loads(lines[i])
-        except: continue
+        except:
+            logger.debug(f"跳过非JSON行(_end_turn): {lines[i][:80]}")
+            continue
         msg = obj.get("message") or obj
         if msg.get("role") == "assistant" and msg.get("stop_reason") == "end_turn":
             if any(isinstance(c, dict) and c.get("type") == "text" for c in msg.get("content", [])):
@@ -137,7 +147,7 @@ def get_session_list(exclude_sid=""):
             try:
                 summaries = json.loads(sf.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                logger.debug("读取会话摘要文件失败", exc_info=True)
 
     sessions = []
     for f in _session_dir.glob("*.jsonl"):
@@ -163,7 +173,7 @@ def get_session_list(exclude_sid=""):
                             desc = re.sub(r'<[^>]+>', '', text).replace("\n", " ").strip()[:90]
                             break
             except Exception:
-                pass
+                logger.debug(f"读取首条消息失败: {f.name}", exc_info=True)
         if desc:
             sessions.append((f.stem, desc, f.stat().st_mtime))
 
@@ -211,10 +221,12 @@ def get_last_reply():
 # ── 回复等待（两阶段轮询）──
 
 async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
+    logger.debug(f"阶段1: 扫描全部JSONL查找用户消息 (inject_text={inject_text[:50]}...)")
     snapshots = {}
     for f in _all_jsonl():
         try: snapshots[str(f)] = f.stat().st_size
-        except: pass
+        except:
+            logger.debug("无法获取JSONL文件大小快照", exc_info=True)
 
     found = False; all_lines = []
 
@@ -236,8 +248,11 @@ async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
         if found: break
         await asyncio.sleep(1)
     else:
+        logger.warning(f"回复超时: 阶段1未找到用户消息 (inject_text={inject_text[:50]}...)")
         return None
 
+    logger.debug(f"阶段2: 在 {jsonl.name} 中等待assistant回复...")
+    _poll_count = 0
     while True:
         sp = snapshots.get(str(jsonl), 0)
         lines, new_pos = await asyncio.to_thread(_read_new, jsonl, sp)
@@ -248,6 +263,9 @@ async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
             if ei is not None:
                 texts = _collect_all_text(all_lines[:ei + 1])
                 if texts: return "\n\n".join(texts)
+        _poll_count += 1
+        if _poll_count % 30 == 0:
+            logger.debug(f"阶段2轮询中: 已等待{_poll_count}s, 当前行数={len(all_lines)}")
         await asyncio.sleep(1)
 
 
@@ -279,6 +297,7 @@ def get_session_stats(jsonl_path=None):
         jsonl_path = _jsonl()
     if not jsonl_path or not jsonl_path.exists():
         return None
+    logger.debug(f"读取会话统计: {jsonl_path.name}")
 
     stats = {
         "input_tokens": 0,
@@ -307,6 +326,7 @@ def get_session_stats(jsonl_path=None):
                               "cache_read_input_tokens", "output_tokens"]:
                         stats[k] += usage.get(k, 0)
     except Exception:
+        logger.warning(f"读取会话统计失败: {jsonl_path}", exc_info=True)
         return None
 
     return stats
@@ -399,4 +419,5 @@ def find_session_dir():
                 mt = max(f.stat().st_mtime for f in files)
                 if mt > best_time:
                     best_time = mt; best = d
+    logger.debug(f"find_session_dir: {'找到' if best else '未找到，使用默认'}")
     return best or (base / "C--Users-zshyl")

@@ -15,14 +15,17 @@ CCtoWechat — Claude Code 接入个人微信
 平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
-import argparse, asyncio, httpx, json, base64, random, time, traceback, re
+import argparse, asyncio, httpx, json, base64, random, time, traceback, re, logging
 from pathlib import Path
 
+from logger_setup import setup_logging, get_logger
 from inject import inject_to_terminal, select_session, send_interrupt
 from sessions import (init as sessions_init, set_locked_jsonl,
                       get_session_list, get_last_reply, wait_reply,
                       find_session_dir, toggle_summaries, _jsonl as sessions_jsonl,
                       get_session_stats, format_stats, format_usage, format_cost)
+
+logger = logging.getLogger("bridge")
 
 API_BASE = "https://ilinkai.weixin.qq.com"
 CH_VERSION = "1.0.2"
@@ -70,7 +73,7 @@ async def login():
             creds = {"token": r["bot_token"], "base_url": r.get("baseurl", API_BASE),
                      "bot_id": r.get("ilink_bot_id", ""), "user_id": r.get("ilink_user_id", "")}
             CRED_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
-            print(f" 登录成功 ({creds['bot_id']})")
+            logger.info(f"登录成功 bot_id={creds['bot_id']}")
             return creds
         if s == "expired":
             refresh += 1
@@ -165,12 +168,13 @@ async def http_handler(reader, writer):
                     to = last_user["to_user"]; ct = last_user["ctx_token"]
                     if "text" in payload:
                         ok = await sendmsg(cli_g, tok_g, to, payload["text"], ct)
-                        print(f"   主动发送: {payload['text'][:60]} {'OK' if ok else 'FAIL'}")
+                        logger.info(f"主动发送文本 {'OK' if ok else 'FAIL'} text={payload['text'][:60]}")
                     elif "image_path" in payload:
                         img = Path(payload["image_path"]).read_bytes()
                         ok = await send_image(cli_g, tok_g, to, ct, img)
-                        print(f"   主动发图: {payload['image_path']} {'OK' if ok else 'FAIL'}")
-    except: pass
+                        logger.info(f"主动发图 {'OK' if ok else 'FAIL'} path={payload['image_path']}")
+    except:
+        logger.exception("HTTP handler 异常")
     finally:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"); await writer.drain(); writer.close()
 
@@ -179,6 +183,20 @@ async def start_http():
     print(" HTTP: http://127.0.0.1:9876")
     return srv
 
+# ── 思考中通知 ──
+async def _wait_with_think(client, tok, fu, ct, jsonl, text, sp, notify_after=30, **kw):
+    """等待 Claude 回复，超过 notify_after 秒给微信发'思考中'，缓解长时间无响应"""
+    notified = False
+    async def notify():
+        await asyncio.sleep(notify_after)
+        nonlocal notified; notified = True
+        try: await sendmsg(client, tok, fu, "Claude 思考中...", ct)
+        except: pass
+    task = asyncio.create_task(notify())
+    try:
+        return await wait_reply(jsonl, text, sp, **kw)
+    finally:
+        task.cancel()
 # ── 审核模式 ──
 pending_approval = False
 last_notified = ""  # 上次通知内容，用于去重
@@ -199,9 +217,9 @@ async def check_approval():
                 if tok_g and cli_g:
                     await sendmsg(cli_g, tok_g, last_user["to_user"], tip, last_user["ctx_token"])
                     pending_approval = True; last_notified = raw
-                    print(f"\n 📩 审核请求已转发微信: {tool}", flush=True)
+                    logger.info(f"审核请求已转发 tool={tool}")
             except Exception:
-                pass
+                logger.exception("检查审核请求失败")
         await asyncio.sleep(1)
 
 # ── 消息 ──
@@ -230,7 +248,9 @@ async def handle(client, tok, raw):
     global awaiting_permissions_select, _permissions_map
     if isinstance(raw, str):
         try: msg = json.loads(raw)
-        except: return
+        except:
+            logger.debug(f"非JSON消息: {str(raw)[:100]}")
+            return
     else: msg = raw
     if msg.get("message_type", 0) not in (1, 2): return
     fu = msg.get("from_user_id", "") or msg.get("from_user", "")
@@ -244,7 +264,7 @@ async def handle(client, tok, raw):
             media = img.get("media", {})
             img_url = media.get("full_url", img.get("url", ""))
             aeskey_hex = img.get("aeskey", "")
-            print(f"\n [{fu[:20]}]: [图片] {img_url[:80]}", flush=True)
+            logger.info(f"收到图片 from={fu[:20]} url={img_url[:80]}")
             await sendmsg(client, tok, fu, "收到图片，下载解密中...", ct)
             img_path = IMAGES_DIR / f"{int(time.time())}.jpg"
             img_path.parent.mkdir(exist_ok=True)
@@ -278,7 +298,7 @@ async def handle(client, tok, raw):
                         else:
                             data = d
                     except ImportError:
-                        pass
+                        logger.debug("cryptography 未安装，跳过图片AES解密")
                 img_path.write_bytes(data)
                 pending_image_path = str(img_path)
                 pending_is_file = False
@@ -297,7 +317,7 @@ async def handle(client, tok, raw):
             file_name = fitem.get("file_name", "unknown")
             file_size = int(fitem.get("len", 0))
             aeskey_b64 = media.get("aes_key", "")
-            print(f"\n [{fu[:20]}]: [文件] {file_name} ({file_size//1024}KB)", flush=True)
+            logger.info(f"收到文件 from={fu[:20]} name={file_name} size={file_size//1024}KB")
             await sendmsg(client, tok, fu, f"收到文件: {file_name} ({file_size//1024}KB)\n下载解密中...", ct)
             file_path = Path(IMAGES_DIR) / "files" / file_name
             file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,7 +348,7 @@ async def handle(client, tok, raw):
                         else:
                             data = d  # fallback
                     except ImportError:
-                        pass
+                        logger.debug("cryptography 未安装，跳过文件AES解密")
                 file_path.write_bytes(data)
                 pending_image_path = str(file_path)
                 pending_is_file = True
@@ -342,7 +362,7 @@ async def handle(client, tok, raw):
         text = item.get("text_item", {}).get("text", "").strip()
         if not text: continue
 
-        print(f"\n [{fu[:20]}]: {text[:120]}")
+        logger.info(f"收到文本消息 from={fu[:20]} text={text[:120]}")
         last_user = {"to_user": fu, "ctx_token": ct}
         LAST_USER_FILE.write_text(json.dumps(last_user), encoding="utf-8")
 
@@ -354,6 +374,7 @@ async def handle(client, tok, raw):
                 await sendmsg(client, tok, fu, "已取消", ct)
             else:
                 alias = _model_map[num]
+                logger.info(f"注入模型切换: /model {alias}")
                 inject_to_terminal(f"/model {alias}")
                 await sendmsg(client, tok, fu, f"已切换至 {alias}，查看终端确认", ct)
             continue
@@ -385,12 +406,12 @@ async def handle(client, tok, raw):
                     select_session(0)
                     await sendmsg(client, tok, fu, "已取消", ct)
                     continue
-                print(f"   选择会话 #{num}...", end="", flush=True)
+                logger.info(f"选择会话 #{num}")
                 select_session(num)
                 time.sleep(3)
                 set_locked_jsonl(None)
                 last_reply = get_last_reply()
-                print(f" 切换 #{num}, reply={len(last_reply)}chars", flush=True)
+                logger.info(f"会话切换完成 num={num} reply_len={len(last_reply)}")
                 if last_reply:
                     await sendmsg(client, tok, fu,
                         f"已切换到会话 #{num}\n\n上次回复：\n{last_reply[:1200]}", ct)
@@ -407,19 +428,19 @@ async def handle(client, tok, raw):
             if t.startswith("/yes") or t.startswith("/y"):
                 msg = f"收到一份微信{label}，已保存至 {safe_path}"
                 inject_to_terminal(msg)
-                print(f" {label}路径已注入，等待Claude回复...", flush=True)
+                logger.info(f"{label}路径已注入 path={pending_image_path}")
                 jsonl = sessions_jsonl()
                 sp = jsonl.stat().st_size if jsonl else 0
-                reply = await wait_reply(jsonl, msg, sp, phase1_timeout=120)
+                reply = await _wait_with_think(client, tok, fu, ct, jsonl, msg, sp, phase1_timeout=120)
                 if reply:
                     await sendmsg(client, tok, fu, reply, ct)
                 continue
             # 其他回复 → 路径 + 文字一起注入
             inject_to_terminal(f"[微信{label}: {safe_path}]\n\n{text}")
-            print(f" {label}+文字已注入，等待Claude回复...", flush=True)
+            logger.info(f"{label}+文字已注入 path={pending_image_path}")
             jsonl = sessions_jsonl()
             sp = jsonl.stat().st_size if jsonl else 0
-            reply = await wait_reply(jsonl, text, sp)
+            reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, sp)
             if reply:
                 await sendmsg(client, tok, fu, reply, ct)
             continue
@@ -428,7 +449,7 @@ async def handle(client, tok, raw):
         if pending_approval and text.strip().lower().startswith(("/yes", "/no", "/y", "/n")):
             pending_approval = False
             answer = "yes" if text.strip().lower().startswith(("/yes", "/y")) else "no"
-            print(f"   审核回复: {answer}", flush=True)
+            logger.info(f"审核回复已注入 answer={answer}")
             inject_to_terminal(answer)
             continue
         elif pending_approval:
@@ -437,10 +458,10 @@ async def handle(client, tok, raw):
 
         # 远程命令：所有 / 开头直接穿透给终端
         if _is_remote_cmd(text):
-            print("   远程命令...", end="", flush=True)
             cmd = text.strip().lower()
             # ── CCtoWechat 本地命令（不注入终端）──
             if cmd.startswith("/stop"):
+                logger.info("执行 /stop")
                 send_interrupt()
                 await sendmsg(client, tok, fu, "已发送中断信号", ct)
                 continue
@@ -453,15 +474,18 @@ async def handle(client, tok, raw):
                 else:
                     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
                     out = f"当前图片保存路径：{IMAGES_DIR}"
+                logger.info(f"执行 /imageloc path={IMAGES_DIR}")
                 await sendmsg(client, tok, fu, out, ct)
                 continue
             if cmd == "/model":
+                logger.info("执行 /model")
                 import os
                 sp = Path.home() / ".claude" / "settings.json"
                 cur_alias = "sonnet"
                 if sp.exists():
                     try: cur_alias = json.loads(sp.read_text()).get("model", "sonnet")
-                    except: pass
+                    except:
+                        logger.debug("读取 settings.json 失败")
                 cur_full = os.environ.get("ANTHROPIC_MODEL", cur_alias)
                 out = f"当前: {cur_alias} ({cur_full})\n\n模型列表：\n0. 取消\n"
                 model_map = {0: None}
@@ -472,36 +496,41 @@ async def handle(client, tok, raw):
                     model_map[i] = alias
                 _model_map = model_map
                 awaiting_model_select = True
+                logger.info(f"模型列表已发送 cur={cur_alias}")
                 await sendmsg(client, tok, fu, out, ct)
                 continue
             if cmd.startswith("/status"):
+                logger.info("执行 /status")
                 try:
                     s = get_session_stats()
                     out = format_stats(s)
                     await sendmsg(client, tok, fu, out, ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/status 失败")
                     await sendmsg(client, tok, fu, f"/status 失败: {e}", ct)
                 continue
             if cmd.startswith("/usage"):
+                logger.info("执行 /usage")
                 try:
                     s = get_session_stats()
                     out = format_usage(s)
                     await sendmsg(client, tok, fu, out, ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/usage 失败")
                     await sendmsg(client, tok, fu, f"/usage 失败: {e}", ct)
                 continue
             if cmd.startswith("/cost"):
+                logger.info("执行 /cost")
                 try:
                     s = get_session_stats()
                     out = format_cost(s)
                     await sendmsg(client, tok, fu, out, ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/cost 失败")
                     await sendmsg(client, tok, fu, f"/cost 失败: {e}", ct)
                 continue
             if cmd.startswith("/permissions"):
+                logger.info("执行 /permissions")
                 try:
                     parts = text.strip().split(maxsplit=1)
                     sp = Path.home() / ".claude" / "settings.local.json"
@@ -511,6 +540,7 @@ async def handle(client, tok, raw):
                         sp_data = json.loads(sp.read_text(encoding="utf-8"))
                         perm = sp_data.get("permissions", {})
                     except:
+                        logger.debug("读取 settings.local.json 失败，使用空配置")
                         sp_data = {}; perm = {}
                     allow = perm.get("allow", [])
                     deny = perm.get("deny", [])
@@ -559,10 +589,11 @@ async def handle(client, tok, raw):
                         _permissions_map = _perm_mode_map
                         await sendmsg(client, tok, fu, out, ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/permissions 失败")
                     await sendmsg(client, tok, fu, f"/permissions 失败: {e}", ct)
                 continue
             if cmd.startswith("/agents"):
+                logger.info("执行 /agents")
                 try:
                     import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
@@ -573,10 +604,11 @@ async def handle(client, tok, raw):
                 except FileNotFoundError:
                     await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/agents 失败")
                     await sendmsg(client, tok, fu, f"/agents 失败: {e}", ct)
                 continue
             if cmd.startswith("/plugins"):
+                logger.info("执行 /plugins")
                 try:
                     import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
@@ -587,10 +619,11 @@ async def handle(client, tok, raw):
                 except FileNotFoundError:
                     await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/plugins 失败")
                     await sendmsg(client, tok, fu, f"/plugins 失败: {e}", ct)
                 continue
             if cmd.startswith("/mcp"):
+                logger.info("执行 /mcp")
                 try:
                     import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
@@ -601,10 +634,11 @@ async def handle(client, tok, raw):
                 except FileNotFoundError:
                     await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("/mcp 失败")
                     await sendmsg(client, tok, fu, f"/mcp 失败: {e}", ct)
                 continue
             if cmd.startswith("/help"):
+                logger.info("执行 /help")
                 out = """CCtoWechat 命令
 
 == 统计 ==
@@ -635,10 +669,12 @@ async def handle(client, tok, raw):
                 continue
             if cmd.startswith("/summaries"):
                 on = toggle_summaries()
+                logger.info(f"执行 /summaries 切换至 {'开启' if on else '关闭'}")
                 await sendmsg(client, tok, fu, f"AI 摘要已{'开启' if on else '关闭'}", ct)
                 continue
             # ── /resume 特殊处理 ──
             if cmd.startswith("/resume"):
+                logger.info("执行 /resume")
                 inject_to_terminal(text)
                 cur_sid = sessions_jsonl().stem if sessions_jsonl() else ""
                 out = "可用会话：\n" + get_session_list(exclude_sid=cur_sid)
@@ -647,35 +683,38 @@ async def handle(client, tok, raw):
                 await sendmsg(client, tok, fu, out[:1500], ct)
                 continue
             # ── 通用命令穿透：注入 → 等 Claude 回复 → 发回 ──
+            logger.info(f"穿透命令: {cmd}")
             inject_to_terminal(text)
             jsonl = sessions_jsonl()
             sp = jsonl.stat().st_size if jsonl else 0
-            print(" 等待回复...", end="", flush=True)
-            reply = await wait_reply(jsonl, text, sp, phase1_timeout=120)
+            reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, sp, phase1_timeout=120)
             if reply:
                 ok = await sendmsg(client, tok, fu, reply[:1500], ct)
-                print(" OK" if ok else " FAIL", flush=True)
+                logger.info(f"命令回复已发送 {'OK' if ok else 'FAIL'} len={len(reply)}")
             else:
                 await sendmsg(client, tok, fu, f"已执行 {text}", ct)
-                print(" 超时", flush=True)
+                logger.warning("命令回复超时")
             continue
 
         jsonl = sessions_jsonl()
         sp = jsonl.stat().st_size if jsonl else 0
 
-        print("   注入...", end="", flush=True)
         inject_to_terminal(text)
-        print(" 等待回复...", end="", flush=True)
-        reply = await wait_reply(jsonl, text, sp)
+        reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, sp)
         if reply:
             ok = await sendmsg(client, tok, fu, reply, ct)
-            print(f"\r   已回复: {reply[:100]}" if ok else f"\r   发送失败!")
+            if ok:
+                logger.info(f"回复已发送 len={len(reply)}")
+            else:
+                logger.warning("回复发送失败")
         else:
-            print(f"\r   超时")
+            logger.warning("回复超时 (文本消息)")
 
 # ── main ──
 async def main():
     global last_user, tok_g, cli_g
+    setup_logging()
+    logger.info("CCtoWechat 启动")
     parser = argparse.ArgumentParser()
     parser.add_argument("--session")
     args = parser.parse_args()
@@ -689,18 +728,18 @@ async def main():
         j = SESSION_DIR / f"{args.session}.jsonl"
         if j.exists():
             set_locked_jsonl(j)
-            print(f" 锁定: {args.session}")
+            logger.info(f"会话已锁定: {args.session}")
         else:
-            print(f" [警告] 会话 {args.session} 不存在")
+            logger.warning(f"会话不存在: {args.session}")
     else:
-        print(" 自动跟随最新会话")
+        logger.info("自动跟随最新会话")
 
     print(f" 会话目录: {SESSION_DIR}")
     srv = await start_http()
 
     if CRED_FILE.exists():
         creds = json.loads(CRED_FILE.read_text(encoding="utf-8"))
-        print(f" 凭证: {creds.get('bot_id','?')}")
+        logger.info(f"已加载凭证 bot_id={creds.get('bot_id','?')}")
     else:
         creds = await login()
         if creds is None: return
@@ -709,12 +748,14 @@ async def main():
 
     if LAST_USER_FILE.exists():
         try: last_user = json.loads(LAST_USER_FILE.read_text(encoding="utf-8"))
-        except: pass
+        except:
+            logger.debug("无法加载 last_user.json")
 
     buf = ""
     if BUF_FILE.exists():
         try: buf = json.loads(BUF_FILE.read_text()).get("buf", "")
-        except: pass
+        except:
+            logger.debug("无法加载 cursor.json")
 
     async with httpx.AsyncClient(proxy=None, trust_env=False) as client:
         cli_g = client
@@ -726,9 +767,9 @@ async def main():
                 resp = await getupdates(client, tok, buf)
                 errc = resp.get("errcode", resp.get("ret", 0))
                 if errc != 0:
-                    if errc == -14: print(" Session过期"); CRED_FILE.unlink(missing_ok=True); return
+                    if errc == -14: logger.error("Session 已过期"); CRED_FILE.unlink(missing_ok=True); return
                     ec += 1; w = 2 if ec < 3 else 30
-                    print(f" 错误{errc} {w}s重试"); await asyncio.sleep(w); continue
+                    logger.warning(f"API 错误 errcode={errc} {w}s后重试"); await asyncio.sleep(w); continue
                 ec = 0
                 for msg in resp.get("msgs", []):
                     asyncio.create_task(handle(client, tok, msg))
@@ -737,7 +778,7 @@ async def main():
             except KeyboardInterrupt: print("\n 停止"); break
             except Exception as e:
                 ec += 1; w = 2 if ec < 3 else 30
-                print(f" 异常: {e}"); traceback.print_exc(); await asyncio.sleep(w)
+                logger.exception(f"主循环异常"); await asyncio.sleep(w)
     srv.close()
 
 if __name__ == "__main__":

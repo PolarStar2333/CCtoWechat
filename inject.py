@@ -2,12 +2,15 @@
 # MIT License - Copyright (c) 2026 CCtoWechat
 """跨平台键盘注入模块（Windows / macOS / Linux）"""
 
-import ctypes, os, subprocess, time
+import ctypes, os, subprocess, time, logging
+
+logger = logging.getLogger("inject")
 
 try:
     import pyperclip
 except ImportError:
     pyperclip = None
+    logger.debug("pyperclip 未安装，将使用系统剪贴板命令")
 
 _WIN = os.name == "nt"
 _OSX = os.uname().sysname == "Darwin" if hasattr(os, "uname") else False
@@ -18,19 +21,25 @@ def _clip_fallback(text):
     if _WIN:
         try:
             # utf-16 带 BOM，Windows clip 命令需要
-            subprocess.run(["clip"], input=text.encode("utf-16", errors="replace"), check=False)
+            r = subprocess.run(["clip"], input=text.encode("utf-16", errors="replace"), check=False)
+            if r.returncode != 0:
+                logger.debug(f"clip.exe 返回 {r.returncode}")
         except Exception:
-            pass
+            logger.debug("clip.exe 不可用", exc_info=True)
     elif _OSX:
         try:
-            subprocess.run(["pbcopy"], input=text.encode(), check=False)
+            r = subprocess.run(["pbcopy"], input=text.encode(), check=False)
+            if r.returncode != 0:
+                logger.debug(f"pbcopy 返回 {r.returncode}")
         except Exception:
-            pass
+            logger.debug("pbcopy 不可用", exc_info=True)
     else:
         try:
-            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode(), check=False)
+            r = subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode(), check=False)
+            if r.returncode != 0:
+                logger.debug(f"xclip 返回 {r.returncode}")
         except Exception:
-            pass
+            logger.debug("xclip 不可用", exc_info=True)
 
 
 # ── 特殊按键 ──
@@ -46,19 +55,24 @@ def _inject_keys(*vks):
         MAP = {0x28: 125, 0x0D: 36, 0x1B: 53}  # Down/Return/Escape
         for vk in vks:
             code = MAP.get(vk, vk)
-            subprocess.run(["osascript", "-e",
+            r = subprocess.run(["osascript", "-e",
                 f'tell app "System Events" to key code {code}'], check=False)
+            if r.returncode != 0:
+                logger.debug(f"osascript key code {code} 失败 rc={r.returncode}")
             time.sleep(0.03)
     else:
         MAP = {0x28: "Down", 0x0D: "Return", 0x1B: "Escape"}
         for vk in vks:
             key = MAP.get(vk, str(vk))
-            subprocess.run(["xdotool", "key", key], check=False)
+            r = subprocess.run(["xdotool", "key", key], check=False)
+            if r.returncode != 0:
+                logger.debug(f"xdotool key {key} 失败 rc={r.returncode}")
             time.sleep(0.03)
 
 
 def send_interrupt():
     """Ctrl+C 中断 + 0.5s后 End+Ctrl+U 清空输入栏"""
+    logger.info("发送中断信号")
     if _WIN:
         user32 = ctypes.windll.user32
         KEYUP = 0x0002
@@ -72,24 +86,31 @@ def send_interrupt():
         time.sleep(0.03)
         user32.keybd_event(0x55, 0, KEYUP, 0); user32.keybd_event(0x11, 0, KEYUP, 0)
     elif _OSX:
-        subprocess.run(["osascript", "-e",
+        r = subprocess.run(["osascript", "-e",
             'tell app "System Events" to keystroke "c" using command down'], check=False)
+        if r.returncode != 0: logger.debug(f"osascript cmd+c 失败 rc={r.returncode}")
         time.sleep(0.5)
-        subprocess.run(["osascript", "-e",
+        r = subprocess.run(["osascript", "-e",
             'tell app "System Events" to key code 124 using command down'], check=False)
+        if r.returncode != 0: logger.debug(f"osascript cmd+end 失败 rc={r.returncode}")
         time.sleep(0.05)
-        subprocess.run(["osascript", "-e",
+        r = subprocess.run(["osascript", "-e",
             'tell app "System Events" to keystroke "u" using control down'], check=False)
+        if r.returncode != 0: logger.debug(f"osascript ctrl+u 失败 rc={r.returncode}")
     else:
-        subprocess.run(["xdotool", "key", "ctrl+c"], check=False)
+        r = subprocess.run(["xdotool", "key", "ctrl+c"], check=False)
+        if r.returncode != 0: logger.debug(f"xdotool ctrl+c 失败 rc={r.returncode}")
         time.sleep(0.5)
-        subprocess.run(["xdotool", "key", "End"], check=False)
+        r = subprocess.run(["xdotool", "key", "End"], check=False)
+        if r.returncode != 0: logger.debug(f"xdotool End 失败 rc={r.returncode}")
         time.sleep(0.05)
-        subprocess.run(["xdotool", "key", "ctrl+u"], check=False)
+        r = subprocess.run(["xdotool", "key", "ctrl+u"], check=False)
+        if r.returncode != 0: logger.debug(f"xdotool ctrl+u 失败 rc={r.returncode}")
 
 
 def select_session(num):
     """映射数字到键盘操作：0=Esc取消, 1=Enter, N=↓(N-1)+Enter"""
+    logger.info(f"选择会话 #{num}")
     VK_ESC, VK_RET, VK_DOWN = 0x1B, 0x0D, 0x28
     if num == 0:
         _inject_keys(VK_ESC)
@@ -198,7 +219,7 @@ def _inject_win(text):
     try:
         return _inject_win_sendinput(text)
     except Exception as e:
-        print(f"    [SendInput 失败，回退剪贴板: {e}]", flush=True)
+        logger.warning(f"SendInput 失败，回退剪贴板: {e}")
         return _inject_win_clipboard(text)
 
 
@@ -210,22 +231,33 @@ def _inject_osx(text):
         '    keystroke return\n'
         'end tell'
     )
-    subprocess.run(["osascript", "-e", script], check=False)
+    r = subprocess.run(["osascript", "-e", script], check=False)
+    if r.returncode != 0:
+        logger.debug(f"osascript 粘贴失败 rc={r.returncode}")
     return True
 
 
 def _inject_linux(text):
-    subprocess.run(["xdotool", "key", "ctrl+v"], check=False)
+    r = subprocess.run(["xdotool", "key", "ctrl+v"], check=False)
+    if r.returncode != 0: logger.debug(f"xdotool ctrl+v 失败 rc={r.returncode}")
     time.sleep(0.1)
-    subprocess.run(["xdotool", "key", "Return"], check=False)
+    r = subprocess.run(["xdotool", "key", "Return"], check=False)
+    if r.returncode != 0: logger.debug(f"xdotool Return 失败 rc={r.returncode}")
     return True
 
 
 def inject_to_terminal(text):
     """将文本注入当前活动终端"""
+    platform = "Win" if _WIN else "OSX" if _OSX else "Linux"
+    logger.info(f"注入文本 ({len(text)} chars, {platform})")
     # Windows: 写剪贴板 + SendInput Ctrl+V 粘贴（多行原子操作）
     if _WIN:
-        return _inject_win(text)
+        result = _inject_win(text)
+        if result:
+            logger.debug(f"注入成功 ({len(text)} chars)")
+        else:
+            logger.error(f"注入失败 ({len(text)} chars)")
+        return result
 
     # macOS / Linux: 剪贴板 + 粘贴
     if pyperclip is not None:
