@@ -15,7 +15,7 @@ CCtoWechat — Claude Code 接入个人微信
 平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
-import argparse, asyncio, httpx, json, base64, random, time, re, logging, sys, os, subprocess, shutil, secrets
+import argparse, asyncio, httpx, json, base64, hashlib, random, time, re, logging, sys, os, subprocess, shutil, secrets
 from pathlib import Path
 
 from logger_setup import setup_logging
@@ -133,49 +133,124 @@ async def sendmsg(client, tok, to_user, text, ctx_token):
     return r.status_code == 200
 
 
-async def send_image(client, tok, to_user, ctx_token, image_bytes):
-    """发送图片：AES-128-ECB 加密 → 上传 CDN → sendmessage"""
+async def _upload_media(client, tok, to_user, file_bytes, media_type):
+    """上传媒体到 CDN，返回 (download_param, aes_key_raw, raw_size) 或 (None, None, 0)
+
+    media_type (iLink): 1=IMAGE 2=VIDEO 3=FILE
+    """
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-    # 1) 生成 AES 密钥（16字节 = 128位）
+    raw_size = len(file_bytes)
+    raw_md5 = hashlib.md5(file_bytes).hexdigest()
+    filekey = secrets.token_hex(16)
     aes_key = secrets.token_bytes(16)
-    # AES-128-ECB 加密（PKCS7 填充）
-    pad_len = 16 - (len(image_bytes) % 16)
-    padded = image_bytes + bytes([pad_len] * pad_len)
+
+    # AES-128-ECB + PKCS7 加密
+    pad_len = 16 - (raw_size % 16)
+    padded = file_bytes + bytes([pad_len] * pad_len)
     cipher = Cipher(algorithms.AES(aes_key), modes.ECB())
     encryptor = cipher.encryptor()
     encrypted = encryptor.update(padded) + encryptor.finalize()
 
-    # 2) 获取 CDN 上传 URL
+    # getuploadurl：aeskey = hex(raw_key) 对所有类型
     r = await client.post(f"{API_BASE}/ilink/bot/getuploadurl",
-        json={"base_info": {"channel_version": CH_VERSION}},
-        headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
+        json={
+            "base_info": {"channel_version": CH_VERSION},
+            "filekey": filekey,
+            "media_type": media_type,
+            "to_user_id": to_user,
+            "rawsize": raw_size,
+            "rawfilemd5": raw_md5,
+            "filesize": len(encrypted),
+            "no_need_thumb": True,
+            "aeskey": aes_key.hex(),
+        },
+        headers=_hdrs(tok), timeout=CONFIG["timeouts"]["upload"])
     if r.status_code != 200:
-        return False
+        logger.warning(f"getuploadurl 失败 HTTP {r.status_code}")
+        return None, None, 0, 0
     up_info = r.json()
-    upload_url = up_info.get("upload_url", "")
-    cdn_url = up_info.get("cdn_url", "")
+    logger.info(f"getuploadurl 响应: {json.dumps(up_info, default=str)[:500]}")
+
+    # 上传 URL：upload_full_url 优先，其次 upload_param 拼接
+    upload_url = up_info.get("upload_full_url", "")
     if not upload_url:
+        upload_param = up_info.get("upload_param", "")
+        if upload_param:
+            cdn_base = up_info.get("cdn_base_url", "https://novac2c.cdn.weixin.qq.com/c2c")
+            upload_url = f"{cdn_base.rstrip('/')}/upload?encrypted_query_param={upload_param}&filekey={filekey}"
+    if not upload_url:
+        logger.warning("getuploadurl 未返回有效上传 URL")
+        return None, None, 0, 0
+
+    # POST 加密数据到 CDN
+    logger.info(f"开始上传 CDN size={len(encrypted)}")
+    r2 = await client.post(upload_url, content=encrypted,
+        headers={"Content-Type": "application/octet-stream"},
+        timeout=CONFIG["timeouts"]["upload"])
+    logger.info(f"CDN 上传响应 HTTP {r2.status_code}")
+    if r2.status_code != 200:
+        logger.warning(f"CDN 上传失败 HTTP {r2.status_code} body={r2.text[:200]}")
+        return None, None, 0, 0
+
+    download_param = r2.headers.get("x-encrypted-param", "")
+    if not download_param:
+        logger.warning("CDN 上传响应缺少 x-encrypted-param")
+        return None, None, 0, 0
+
+    return download_param, aes_key, raw_size, len(encrypted)
+
+
+def _aeskey_for_msg(aes_key):
+    """sendmessage 中的 aes_key 格式：base64(hex(raw_key))，所有类型统一"""
+    return base64.b64encode(aes_key.hex().encode()).decode()
+
+
+async def send_image(client, tok, to_user, ctx_token, image_bytes):
+    """发送图片：AES-128-ECB 加密 → 上传 CDN → sendmessage"""
+    download_param, aes_key, raw_size, enc_size = await _upload_media(
+        client, tok, to_user, image_bytes, 1)  # 1 = IMAGE
+    if not download_param:
         return False
 
-    # 3) 上传加密图片到 CDN
-    r2 = await client.put(upload_url, content=encrypted, timeout=CONFIG["timeouts"]["upload"])
-    if r2.status_code not in (200, 204):
-        return False
-
-    # 4) 发送图片消息
     cid = f"c{int(time.time()*1000)}"
-    r3 = await client.post(f"{API_BASE}/ilink/bot/sendmessage", json={
+    r = await client.post(f"{API_BASE}/ilink/bot/sendmessage", json={
         "msg": {"to_user_id": to_user, "client_id": cid, "message_type": 2,
                 "message_state": 2, "context_token": ctx_token,
                 "item_list": [{"type": 2, "image_item": {
-                    "aes_key": base64.b64encode(aes_key).decode(),
-                    "file_size": len(image_bytes),
-                    "cdn_url": cdn_url,
-                    "width": 0, "height": 0,
+                    "media": {
+                        "encrypt_query_param": download_param,
+                        "aes_key": _aeskey_for_msg(aes_key),
+                        "encrypt_type": 1,
+                    },
+                    "mid_size": enc_size,
                 }}]},
         "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
-    return r3.status_code == 200
+    return r.status_code == 200
+
+
+async def send_file(client, tok, to_user, ctx_token, file_bytes, file_name):
+    """发送文件：AES-128-ECB 加密 → 上传 CDN → sendmessage"""
+    download_param, aes_key, raw_size, enc_size = await _upload_media(
+        client, tok, to_user, file_bytes, 3)  # 3 = FILE
+    if not download_param:
+        return False
+
+    cid = f"c{int(time.time()*1000)}"
+    r = await client.post(f"{API_BASE}/ilink/bot/sendmessage", json={
+        "msg": {"to_user_id": to_user, "client_id": cid, "message_type": 2,
+                "message_state": 2, "context_token": ctx_token,
+                "item_list": [{"type": 4, "file_item": {
+                    "media": {
+                        "encrypt_query_param": download_param,
+                        "aes_key": _aeskey_for_msg(aes_key),
+                        "encrypt_type": 1,
+                    },
+                    "file_name": file_name,
+                    "len": str(raw_size),
+                }}]},
+        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
+    return r.status_code == 200
 
 # ── HTTP /send ──
 last_user = None
@@ -227,6 +302,12 @@ async def http_handler(reader, writer):
                         img = Path(payload["image_path"]).read_bytes()
                         ok = await send_image(cli_g, tok_g, to, ct, img)
                         logger.info(f"主动发图 {'OK' if ok else 'FAIL'} path={payload['image_path']}")
+                    elif "file_path" in payload:
+                        fp = Path(payload["file_path"])
+                        data = fp.read_bytes()
+                        name = payload.get("file_name", fp.name)
+                        ok = await send_file(cli_g, tok_g, to, ct, data, name)
+                        logger.info(f"主动发文件 {'OK' if ok else 'FAIL'} path={payload['file_path']}")
     except Exception:
         logger.exception("HTTP handler 异常")
     finally:
@@ -451,9 +532,78 @@ async def handle(client, tok, raw):
             continue
         if item_type != 1: continue
         text = item.get("text_item", {}).get("text", "").strip()
-        if not text: continue
 
-        logger.info(f"收到文本消息 from={fu[:20]} text={text[:120]}")
+        # 引用消息处理
+        ref = item.get("ref_msg", {})
+        if ref:
+            ref_item = ref.get("message_item", {})
+            ref_type = ref_item.get("type", 0)
+            if ref_type == 1:
+                ref_text = ref_item.get("text_item", {}).get("text", "")
+                if ref_text:
+                    prefix = f"「{ref_text.strip()}」"
+                    text = f"{prefix}{text}" if text else prefix
+            elif ref_type in (2, 4):
+                # 引用文件/图片 → 下载解密，路径拼到消息前
+                try:
+                    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                    is_img = ref_type == 2
+                    if is_img:
+                        ri = ref_item.get("image_item", {})
+                        media = ri.get("media", {})
+                        dl_url = media.get("full_url", ri.get("url", ""))
+                        aeskey_raw = ri.get("aeskey", "")
+                        suffix = ".jpg"
+                        label = "图片引用"
+                    else:
+                        ri = ref_item.get("file_item", {})
+                        media = ri.get("media", {})
+                        dl_url = media.get("full_url", "")
+                        aeskey_raw = media.get("aes_key", "")
+                        suffix = Path(ri.get("file_name", "unknown")).suffix or ".bin"
+                        label = "文件引用"
+                    if dl_url:
+                        rdl = await client.get(dl_url, timeout=CONFIG["timeouts"]["download"])
+                        if rdl.status_code == 200:
+                            data = rdl.content
+                            if aeskey_raw:
+                                key = None
+                                try:
+                                    key = bytes.fromhex(aeskey_raw)
+                                except Exception:
+                                    try:
+                                        key = base64.b64decode(aeskey_raw)
+                                    except Exception:
+                                        pass
+                                if key:
+                                    for mode_desc, cipher in [
+                                        ("ECB", Cipher(algorithms.AES(key), modes.ECB())),
+                                        ("CBC", Cipher(algorithms.AES(key), modes.CBC(bytes(16)))),
+                                    ]:
+                                        try:
+                                            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
+                                            if is_img and d[:2] == b'\xff\xd8':
+                                                pad = d[-1]
+                                                if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
+                                                    data = d[:-pad]
+                                                else:
+                                                    data = d
+                                                break
+                                            pad = d[-1]
+                                            if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
+                                                data = d[:-pad]; break
+                                        except Exception:
+                                            continue
+                            ref_path = IMAGES_DIR / f"ref_{int(time.time())}{suffix}"
+                            ref_path.parent.mkdir(exist_ok=True)
+                            ref_path.write_bytes(data)
+                            prefix = str(ref_path)
+                            text = f"{prefix} {text}" if text else prefix
+                            logger.info(f"{label}已下载 path={ref_path}")
+                except Exception:
+                    logger.debug("引用文件下载失败", exc_info=True)
+
+        logger.info(f"收到文本消息 from={fu[:20]} has_ref={bool(item.get('ref_msg'))} text={text[:120]}")
         last_user = {"to_user": fu, "ctx_token": ct}
         LAST_USER_FILE.write_text(json.dumps(last_user), encoding="utf-8")
 
