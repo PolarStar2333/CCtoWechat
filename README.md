@@ -22,6 +22,8 @@ Claude Code 接入个人微信。纯 Python 实现，消息注入终端，微信
 - **纯 Python，零门槛** — `pip install` + `python bridge.py` + 微信扫码，三步完成。不需要 Node.js、npm、Go 等运行时
 - **跨平台** —支持 Windows / macOS / Linux。由于HarmonyOS缺失组件过多，HMPC暂不支持
 - **AI 摘要会话列表** — `/resume` 显示的摘要由 AI 生成，比 Claude Code 自带的更可读
+- **引用消息处理** — 微信引用文字消息，自动拼接 `「被引用内容」`；引用文件/图片，自动下载解密拼路径到终端
+- **发图/发文件** — 桥接可将图片和文件发回微信，支持 HTTP `/send` 远程触发
 
 ## 原理
 
@@ -160,9 +162,20 @@ Windows 下 `start_bridge.bat` 已放入启动文件夹，开机自动启动。
 ## 主动发微信
 
 ```bash
+# 发文字
 curl -X POST http://127.0.0.1:9876/send \
   -H "Content-Type: application/json" \
   -d '{"text": "你好"}'
+
+# 发图片
+curl -X POST http://127.0.0.1:9876/send \
+  -H "Content-Type: application/json" \
+  -d '{"image_path": "/path/to/image.jpg"}'
+
+# 发文件
+curl -X POST http://127.0.0.1:9876/send \
+  -H "Content-Type: application/json" \
+  -d '{"file_path": "/path/to/doc.pdf", "file_name": "report.pdf"}'
 ```
 
 ## 命令行
