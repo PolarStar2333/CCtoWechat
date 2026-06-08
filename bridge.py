@@ -252,6 +252,28 @@ async def send_file(client, tok, to_user, ctx_token, file_bytes, file_name):
         "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
     return r.status_code == 200
 
+async def send_video(client, tok, to_user, ctx_token, video_bytes):
+    """发送视频：AES-128-ECB 加密 → 上传 CDN → sendmessage"""
+    download_param, aes_key, raw_size, enc_size = await _upload_media(
+        client, tok, to_user, video_bytes, 2)  # 2 = VIDEO
+    if not download_param:
+        return False
+
+    cid = f"c{int(time.time()*1000)}"
+    r = await client.post(f"{API_BASE}/ilink/bot/sendmessage", json={
+        "msg": {"to_user_id": to_user, "client_id": cid, "message_type": 2,
+                "message_state": 2, "context_token": ctx_token,
+                "item_list": [{"type": 5, "video_item": {
+                    "media": {
+                        "encrypt_query_param": download_param,
+                        "aes_key": _aeskey_for_msg(aes_key),
+                        "encrypt_type": 1,
+                    },
+                    "video_size": enc_size,
+                }}]},
+        "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
+    return r.status_code == 200
+
 # ── HTTP /send ──
 last_user = None
 tok_g = None
@@ -308,6 +330,10 @@ async def http_handler(reader, writer):
                         name = payload.get("file_name", fp.name)
                         ok = await send_file(cli_g, tok_g, to, ct, data, name)
                         logger.info(f"主动发文件 {'OK' if ok else 'FAIL'} path={payload['file_path']}")
+                    elif "video_path" in payload:
+                        vid = Path(payload["video_path"]).read_bytes()
+                        ok = await send_video(cli_g, tok_g, to, ct, vid)
+                        logger.info(f"主动发视频 {'OK' if ok else 'FAIL'} path={payload['video_path']}")
     except Exception:
         logger.exception("HTTP handler 异常")
     finally:

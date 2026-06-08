@@ -176,6 +176,11 @@ curl -X POST http://127.0.0.1:9876/send \
 curl -X POST http://127.0.0.1:9876/send \
   -H "Content-Type: application/json" \
   -d '{"file_path": "/path/to/doc.pdf", "file_name": "report.pdf"}'
+
+# 发视频
+curl -X POST http://127.0.0.1:9876/send \
+  -H "Content-Type: application/json" \
+  -d '{"video_path": "/path/to/video.mp4"}'
 ```
 
 ## 命令行
