@@ -26,7 +26,7 @@ def format_questions(questions):
         if qi < len(questions) - 1:
             lines.append("")
     lines.append("")
-    lines.append("回复格式: A2B13C4  纯数字选择第一个问题  /submit 提交  /stop 取消")
+    lines.append("回复格式: [字母][数字][字母][数字]...  多选可连写数字  如 A123B12  不加分隔符  /submit 提交  /stop 取消")
     return "\n".join(lines)
 
 
