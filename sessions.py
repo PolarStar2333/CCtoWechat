@@ -14,6 +14,11 @@ _root = None          # CCtoWechat 根目录
 _locked_jsonl = None  # 锁定的 JSONL 文件
 _use_ai_summaries = True  # AI 摘要开关
 
+# ── /now 实时监听缓冲区 ──
+_now_buffer = []       # 阶段2累积的 assistant 内容（含 tool_use 摘要）
+_now_cursor = 0         # get_now_snapshot 已输出的位置，只返回增量
+_now_active = False     # 是否正在监听（阶段2中）
+
 
 def init(session_dir, root, locked_jsonl=None):
     """由 bridge.py 调用来初始化模块状态"""
@@ -29,11 +34,46 @@ def set_locked_jsonl(path):
     _locked_jsonl = path
 
 
+def set_summaries(on):
+    """设置 AI 摘要开关（用于启动时恢复状态），不保存文件"""
+    global _use_ai_summaries
+    _use_ai_summaries = on
+
+
 def toggle_summaries():
     """切换 AI 摘要开关，返回新状态"""
     global _use_ai_summaries
     _use_ai_summaries = not _use_ai_summaries
     return _use_ai_summaries
+
+
+def reset_now_buffer():
+    """信号1触发时清空缓冲区，开始新一轮监听"""
+    global _now_buffer, _now_cursor, _now_active
+    _now_buffer = []
+    _now_cursor = 0
+    _now_active = True
+
+
+def is_now_active():
+    """/now 是否可用（阶段2进行中）"""
+    global _now_active
+    return _now_active
+
+
+def get_now_snapshot():
+    """返回 /now 快照：仅返回上次查询后新增的内容（去重）"""
+    global _now_buffer, _now_cursor
+    if not _now_buffer:
+        return "暂无内容，Claude 仍在思考中..."
+    new_items = _now_buffer[_now_cursor:]
+    _now_cursor = len(_now_buffer)
+    if not new_items:
+        return "(无新内容)"
+    full = "\n".join(new_items)
+    if len(full) > 800:
+        return "...\n" + full[-800:]
+    return full
 
 
 # ── JSONL 基础操作 ──
@@ -70,6 +110,25 @@ def _text(msg):
     return ""
 
 
+def _assistant_snippet(msg):
+    """提取 assistant 消息的可读摘要（text + tool_use 名称/输入）"""
+    c = msg.get("content", [])
+    if isinstance(c, str): return c[:300]
+    parts = []
+    if isinstance(c, list):
+        for it in c:
+            if not isinstance(it, dict): continue
+            t = it.get("type", "")
+            if t == "text":
+                parts.append(it.get("text", ""))
+            elif t == "tool_use":
+                name = it.get("name", "?")
+                inp = it.get("input", {})
+                inp_str = str(inp)[:200] if inp else ""
+                parts.append(f"[工具调用: {name}]\n{inp_str}")
+    return "\n".join(parts)
+
+
 def _read_new(jsonl_path, pos):
     try:
         with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
@@ -84,7 +143,7 @@ def _has_user(lines, fragment):
     frag = fragment.strip()[:50]
     for ln in lines:
         try: obj = json.loads(ln)
-        except:
+        except Exception:
             logger.debug(f"跳过非JSON行: {ln[:80]}")
             continue
         msg = obj.get("message") or obj
@@ -97,7 +156,7 @@ def _collect_all_text(lines):
     texts = []
     for ln in lines:
         try: obj = json.loads(ln)
-        except:
+        except Exception:
             logger.debug(f"跳过非JSON行(_collect): {ln[:80]}")
             continue
         msg = obj.get("message") or obj
@@ -112,7 +171,7 @@ def _collect_all_text(lines):
 def _find_end_turn(lines):
     for i in range(len(lines) - 1, -1, -1):
         try: obj = json.loads(lines[i])
-        except:
+        except Exception:
             logger.debug(f"跳过非JSON行(_end_turn): {lines[i][:80]}")
             continue
         msg = obj.get("message") or obj
@@ -220,17 +279,22 @@ def get_last_reply():
 
 # ── 回复等待（两阶段轮询）──
 
-async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600,
-                    on_first_respond=None):
+async def wait_reply(jsonl, inject_text, phase1_timeout=600,
+                    on_first_respond=None, on_user_found=None, on_tool_use=None,
+                    on_ask_user_question=None):
     """
     两阶段轮询：阶段1找到用户消息，阶段2等待 assistant end_turn。
-    on_first_respond: 可选异步回调，检测到 assistant 首次输出内容时触发（仅一次）。
+    on_user_found: 阶段1找到用户消息时触发（信号1：注入成功确认）。
+    on_tool_use: 阶段2首次检测到 tool_use 时触发（信号2：工具调用）。
+    on_ask_user_question: 阶段2检测到 AskUserQuestion 时触发（交互式选项）。
+    on_first_respond: 阶段2首次检测到 assistant 文本输出时触发（信号3：API开始返回）。
     """
+    global _now_buffer, _now_active
     logger.debug(f"阶段1: 扫描全部JSONL查找用户消息 (inject_text={inject_text[:50]}...)")
     snapshots = {}
     for f in _all_jsonl():
         try: snapshots[str(f)] = f.stat().st_size
-        except:
+        except Exception:
             logger.debug("无法获取JSONL文件大小快照", exc_info=True)
 
     found = False; all_lines = []
@@ -239,50 +303,88 @@ async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600,
         for f in _all_jsonl():
             key = str(f)
             sp = snapshots.get(key, 0)
-            lines, _new_pos = await asyncio.to_thread(_read_new, f, sp)
+            lines, new_pos = await asyncio.to_thread(_read_new, f, sp)
             if _has_user(lines, inject_text):
                 jsonl = f; found = True
                 all_lines = lines[:]
-                snapshots[key] = _new_pos
+                snapshots[key] = new_pos
                 ei = _find_end_turn(all_lines)
                 if ei is not None:
                     texts = _collect_all_text(all_lines[:ei + 1])
-                    if texts: return "\n\n".join(texts)
+                    if texts:
+                        _now_active = False
+                        return "\n\n".join(texts)
                 break
-            if lines: snapshots[key] = _new_pos
+            if lines: snapshots[key] = new_pos
         if found: break
         await asyncio.sleep(1)
     else:
         logger.warning(f"回复超时: 阶段1未找到用户消息 (inject_text={inject_text[:50]}...)")
+        _now_active = False
         return None
 
+    # 信号1：用户消息已确认 → 注入成功
+    if on_user_found:
+        try: await on_user_found()
+        except Exception: pass
+
     logger.debug(f"阶段2: 在 {jsonl.name} 中等待assistant回复...")
-    _poll_count = 0
-    _first_notified = False
+    poll_count = 0
+    first_notified = False
+    tool_notified = False
+    ask_notified = False
     while True:
         sp = snapshots.get(str(jsonl), 0)
         lines, new_pos = await asyncio.to_thread(_read_new, jsonl, sp)
         if lines:
             snapshots[str(jsonl)] = new_pos
             all_lines.extend(lines)
-            # 检测 assistant 首次输出 → 触发回调（比 end_turn 早得多）
-            if not _first_notified and on_first_respond:
+            # 累积 assistant 内容到 /now 缓冲区
+            for ln in lines:
+                try: obj = json.loads(ln)
+                except Exception: continue
+                msg = obj.get("message") or obj
+                if msg.get("role") == "assistant":
+                    snippet = _assistant_snippet(msg)
+                    if snippet.strip():
+                        _now_buffer.append(snippet.strip())
+                    # 信号2：首次检测到 tool_use
+                    if not tool_notified and on_tool_use:
+                        if any(isinstance(c, dict) and c.get("type") == "tool_use"
+                               for c in msg.get("content", [])):
+                            tool_notified = True
+                            try: await on_tool_use()
+                            except Exception: pass
+                    # 交互式选项：检测 AskUserQuestion
+                    if not ask_notified and on_ask_user_question:
+                        for c in msg.get("content", []):
+                            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "AskUserQuestion":
+                                questions = c.get("input", {}).get("questions", [])
+                                if questions:
+                                    ask_notified = True
+                                    try: await on_ask_user_question(questions)
+                                    except Exception: pass
+                                break
+            # 信号3：首次文本输出（比 end_turn 早）
+            if not first_notified and on_first_respond:
                 for ln in lines:
                     try: obj = json.loads(ln)
-                    except: continue
+                    except Exception: continue
                     msg = obj.get("message") or obj
                     if msg.get("role") == "assistant" and _text(msg).strip():
-                        _first_notified = True
+                        first_notified = True
                         try: await on_first_respond()
-                        except: pass
+                        except Exception: pass
                         break
             ei = _find_end_turn(all_lines)
             if ei is not None:
                 texts = _collect_all_text(all_lines[:ei + 1])
-                if texts: return "\n\n".join(texts)
-        _poll_count += 1
-        if _poll_count % 30 == 0:
-            logger.debug(f"阶段2轮询中: 已等待{_poll_count}s, 当前行数={len(all_lines)}")
+                if texts:
+                    _now_active = False
+                    return "\n\n".join(texts)
+        poll_count += 1
+        if poll_count % 30 == 0:
+            logger.debug(f"阶段2轮询中: 已等待{poll_count}s, 当前行数={len(all_lines)}")
         await asyncio.sleep(1)
 
 

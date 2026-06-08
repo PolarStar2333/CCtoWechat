@@ -15,16 +15,19 @@ CCtoWechat — Claude Code 接入个人微信
 平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
-import argparse, asyncio, httpx, json, base64, random, time, traceback, re, logging
+import argparse, asyncio, httpx, json, base64, random, time, re, logging, sys, os, subprocess, shutil, secrets
 from pathlib import Path
 
-from logger_setup import setup_logging, get_logger
+from logger_setup import setup_logging
 from config import CONFIG
-from inject import inject_to_terminal, select_session, send_interrupt
+from inject import inject_to_terminal, select_session, send_interrupt, inject_enter
 from sessions import (init as sessions_init, set_locked_jsonl,
                       get_session_list, get_last_reply, wait_reply,
-                      find_session_dir, toggle_summaries, _jsonl as sessions_jsonl,
-                      get_session_stats, format_stats, format_usage, format_cost)
+                      find_session_dir, toggle_summaries, set_summaries,
+                      _jsonl as sessions_jsonl,
+                      get_session_stats, format_stats, format_usage, format_cost,
+                      reset_now_buffer, get_now_snapshot, is_now_active)
+from selector import format_questions, validate_answer, inject_answers, format_confirmation
 
 logger = logging.getLogger("bridge")
 
@@ -36,9 +39,29 @@ CRED_FILE = ROOT / "credentials.json"
 BUF_FILE = ROOT / "cursor.json"
 LAST_USER_FILE = ROOT / "last_user.json"
 APPROVAL_FILE = ROOT / "approval_pending.json"
+STATE_FILE = ROOT / "state.json"
+
+# ── 持久化状态 ──
+def _load_state():
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug("加载 state.json 失败", exc_info=True)
+    return {}
+
+def _save_state(**kw):
+    state = _load_state()
+    state.update(kw)
+    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
 SESSION_DIR = find_session_dir()
 sessions_init(SESSION_DIR, ROOT)
+
+# 从持久化状态恢复开关
+_st = _load_state()
+if not _st.get("ai_summaries", True):
+    set_summaries(False)
 
 # ── helpers ──
 def _uin():
@@ -112,7 +135,6 @@ async def sendmsg(client, tok, to_user, text, ctx_token):
 
 async def send_image(client, tok, to_user, ctx_token, image_bytes):
     """发送图片：AES-128-ECB 加密 → 上传 CDN → sendmessage"""
-    import secrets
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
     # 1) 生成 AES 密钥（16字节 = 128位）
@@ -156,7 +178,9 @@ async def send_image(client, tok, to_user, ctx_token, image_bytes):
     return r3.status_code == 200
 
 # ── HTTP /send ──
-last_user = None; tok_g = None; cli_g = None
+last_user = None
+tok_g = None
+cli_g = None
 
 async def http_handler(reader, writer):
     global last_user, tok_g, cli_g
@@ -203,7 +227,7 @@ async def http_handler(reader, writer):
                         img = Path(payload["image_path"]).read_bytes()
                         ok = await send_image(cli_g, tok_g, to, ct, img)
                         logger.info(f"主动发图 {'OK' if ok else 'FAIL'} path={payload['image_path']}")
-    except:
+    except Exception:
         logger.exception("HTTP handler 异常")
     finally:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"); await writer.drain(); writer.close()
@@ -214,15 +238,58 @@ async def start_http():
     return srv
 
 # ── API 响应通知 ──
-async def _wait_with_think(client, tok, fu, ct, jsonl, text, sp, **kw):
-    """等待 Claude 回复，检测到 API 开始输出时通知微信"""
+async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
+    """等待 Claude 回复，三阶段信号通知微信"""
+    reset_now_buffer()  # 新一轮监听开始
+    async def on_user():
+        try: await sendmsg(client, tok, fu, "Claude 思考中...", ct)
+        except Exception: pass
+    async def on_tool():
+        try: await sendmsg(client, tok, fu, "Claude 正在使用工具...", ct)
+        except Exception: pass
     async def on_respond():
         try: await sendmsg(client, tok, fu, "API 开始返回", ct)
-        except: pass
-    return await wait_reply(jsonl, text, sp, on_first_respond=on_respond, **kw)
+        except Exception: pass
+    async def on_question(questions):
+        global awaiting_question_answer, _pending_questions
+        _pending_questions = questions
+        msg = format_questions(questions)
+        try: await sendmsg(client, tok, fu, msg, ct)
+        except Exception: pass
+        awaiting_question_answer = True
+    return await wait_reply(jsonl, text,
+        on_user_found=on_user, on_tool_use=on_tool,
+        on_first_respond=on_respond,
+        on_ask_user_question=on_question, **kw)
+
+
+async def _wait_and_reply(client, tok, fu, ct, text, **kw):
+    """等待 Claude 回复 → 发回微信（注入由调用方完成）"""
+    jsonl = sessions_jsonl()
+    reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, **kw)
+    if reply:
+        ok = await sendmsg(client, tok, fu, reply[:1500], ct)
+        logger.info(f"回复已发送 {'OK' if ok else 'FAIL'} len={len(reply)}")
+    else:
+        logger.warning(f"回复超时: {text[:60]}")
+    return reply
+
+
+async def _inject_and_wait(client, tok, fu, ct, text, **kw):
+    """注入终端 → 等待回复 → 发回微信"""
+    inject_to_terminal(text)
+    return await _wait_and_reply(client, tok, fu, ct, text, **kw)
+
+
 # ── 审核模式 ──
 pending_approval = False
-last_notified = ""  # 上次通知内容，用于去重
+last_notified = ""  # 上次审核通知内容，用于去重
+# ── 交互式选项 ──
+awaiting_question_answer = False  # Claude AskUserQuestion 等待用户回答
+_pending_questions = []            # 当前问题列表，供答案映射用
+_answers_injected = False          # 答案已注入，等待确认提交/取消
+_debug_mode = _load_state().get("debug_mode", False)  # debug 模式开关（持久化）
+_awaiting_debug_confirm = False    # 等待确认 /debug
 
 async def check_approval():
     """后台协程：检测权限请求，内容去重后通知微信"""
@@ -262,16 +329,17 @@ def _is_remote_cmd(text):
     t = text.strip()
     if not t.startswith("/"):
         return False
-    first = t.split()[0].lower() if t.strip() else ""
-    return bool(re.match(r'^/[a-zA-Z][a-zA-Z0-9_-]*$', first))
+    first = t.split()[0].lower()
+    return re.match(r'^/[a-zA-Z][a-zA-Z0-9_-]*$', first) is not None
 
 async def handle(client, tok, raw):
-    global last_user, pending_approval, awaiting_session_select, awaiting_model_select, _model_map, IMAGES_DIR
+    global last_user, pending_approval, awaiting_question_answer, _pending_questions, _answers_injected, _debug_mode, _awaiting_debug_confirm
+    global awaiting_session_select, awaiting_model_select, _model_map, IMAGES_DIR
     global awaiting_image_action, pending_image_path, pending_is_file
     global awaiting_permissions_select, _permissions_map
     if isinstance(raw, str):
         try: msg = json.loads(raw)
-        except:
+        except Exception:
             logger.debug(f"非JSON消息: {str(raw)[:100]}")
             return
     else: msg = raw
@@ -413,7 +481,7 @@ async def handle(client, tok, raw):
                 sp = Path.home() / ".claude" / "settings.local.json"
                 try:
                     sp_data = json.loads(sp.read_text(encoding="utf-8")) if sp.exists() else {}
-                except:
+                except Exception:
                     sp_data = {}
                 sp_data["permissionMode"] = mode
                 sp.write_text(json.dumps(sp_data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -452,21 +520,30 @@ async def handle(client, tok, raw):
                 msg = f"收到一份微信{label}，已保存至 {safe_path}"
                 inject_to_terminal(msg)
                 logger.info(f"{label}路径已注入 path={pending_image_path}")
-                jsonl = sessions_jsonl()
-                sp = jsonl.stat().st_size if jsonl else 0
-                reply = await _wait_with_think(client, tok, fu, ct, jsonl, msg, sp, phase1_timeout=120)
-                if reply:
-                    await sendmsg(client, tok, fu, reply, ct)
+                await _wait_and_reply(client, tok, fu, ct, msg, phase1_timeout=120)
                 continue
             # 其他回复 → 路径 + 文字一起注入
             inject_to_terminal(f"[微信{label}: {safe_path}]\n\n{text}")
             logger.info(f"{label}+文字已注入 path={pending_image_path}")
-            jsonl = sessions_jsonl()
-            sp = jsonl.stat().st_size if jsonl else 0
-            reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, sp)
-            if reply:
-                await sendmsg(client, tok, fu, reply, ct)
+            await _wait_and_reply(client, tok, fu, ct, text)
             continue
+
+        # ── /debug 确认 ──
+        if _awaiting_debug_confirm:
+            t = text.strip().lower()
+            if t.startswith("/yes") or t.startswith("/y"):
+                _awaiting_debug_confirm = False
+                _debug_mode = True
+                _save_state(debug_mode=True)
+                await sendmsg(client, tok, fu, "Debug 模式已开启\n\n/restart — 重启桥\n/debugoff — 退出 debug 模式", ct)
+                continue
+            elif t.startswith("/no") or t.startswith("/n"):
+                _awaiting_debug_confirm = False
+                await sendmsg(client, tok, fu, "已取消", ct)
+                continue
+            else:
+                _awaiting_debug_confirm = False
+                # 不是 yes/no，照常处理
 
         # 审核模式：只有以 /yes 或 /no 开头的消息才当审核处理
         if pending_approval and text.strip().lower().startswith(("/yes", "/no", "/y", "/n")):
@@ -486,6 +563,14 @@ async def handle(client, tok, raw):
             if cmd.startswith("/stop"):
                 logger.info("执行 /stop")
                 send_interrupt()
+                awaiting_question_answer = False
+                _pending_questions = []
+                _answers_injected = False
+                awaiting_session_select = False
+                awaiting_model_select = False
+                awaiting_permissions_select = False
+                pending_approval = False
+                awaiting_image_action = False
                 await sendmsg(client, tok, fu, "已发送中断信号", ct)
                 continue
             if cmd.startswith("/imageloc"):
@@ -502,12 +587,11 @@ async def handle(client, tok, raw):
                 continue
             if cmd == "/model":
                 logger.info("执行 /model")
-                import os
                 sp = Path.home() / ".claude" / "settings.json"
                 cur_alias = "sonnet"
                 if sp.exists():
                     try: cur_alias = json.loads(sp.read_text()).get("model", "sonnet")
-                    except:
+                    except Exception:
                         logger.debug("读取 settings.json 失败")
                 cur_full = os.environ.get("ANTHROPIC_MODEL", cur_alias)
                 out = f"当前: {cur_alias} ({cur_full})\n\n模型列表：\n0. 取消\n"
@@ -562,7 +646,7 @@ async def handle(client, tok, raw):
                     try:
                         sp_data = json.loads(sp.read_text(encoding="utf-8"))
                         perm = sp_data.get("permissions", {})
-                    except:
+                    except Exception:
                         logger.debug("读取 settings.local.json 失败，使用空配置")
                         sp_data = {}; perm = {}
                     allow = perm.get("allow", [])
@@ -618,7 +702,6 @@ async def handle(client, tok, raw):
             if cmd.startswith("/agents"):
                 logger.info("执行 /agents")
                 try:
-                    import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
                     proc = subprocess.run([claude, "agents"], capture_output=True,
                                           text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
@@ -633,7 +716,6 @@ async def handle(client, tok, raw):
             if cmd.startswith("/plugins"):
                 logger.info("执行 /plugins")
                 try:
-                    import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
                     proc = subprocess.run([claude, "plugin", "list"], capture_output=True,
                                           text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
@@ -648,7 +730,6 @@ async def handle(client, tok, raw):
             if cmd.startswith("/mcp"):
                 logger.info("执行 /mcp")
                 try:
-                    import subprocess, shutil
                     claude = shutil.which("claude") or "claude"
                     proc = subprocess.run([claude, "mcp", "list"], capture_output=True,
                                           text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
@@ -683,6 +764,8 @@ async def handle(client, tok, raw):
 
 == 控制 ==
 /stop — 中断 Claude 当前操作
+/now  — 查看 Claude 当前思考进度
+/submit — 提交交互式选项答案
 /summaries — 开关 AI 会话摘要
 /imageloc [路径] — 图片保存路径
 
@@ -692,8 +775,50 @@ async def handle(client, tok, raw):
                 continue
             if cmd.startswith("/summaries"):
                 on = toggle_summaries()
+                _save_state(ai_summaries=on)
                 logger.info(f"执行 /summaries 切换至 {'开启' if on else '关闭'}")
                 await sendmsg(client, tok, fu, f"AI 摘要已{'开启' if on else '关闭'}", ct)
+                continue
+            if cmd.startswith("/now"):
+                logger.info("执行 /now")
+                if is_now_active():
+                    snapshot = get_now_snapshot()
+                    await sendmsg(client, tok, fu, f"Claude 当前状态：\n\n{snapshot}", ct)
+                else:
+                    await sendmsg(client, tok, fu, "当前没有进行中的请求", ct)
+                continue
+            if cmd.startswith("/submit"):
+                logger.info("执行 /submit")
+                if awaiting_question_answer:
+                    awaiting_question_answer = False
+                    _pending_questions = []
+                    _answers_injected = False
+                    inject_enter()
+                    await sendmsg(client, tok, fu, "已提交答案", ct)
+                else:
+                    await sendmsg(client, tok, fu, "当前没有待提交的选项", ct)
+                continue
+            if cmd.startswith("/debug"):
+                logger.info("执行 /debug")
+                _awaiting_debug_confirm = True
+                await sendmsg(client, tok, fu, "确认启动 /debug 模式？这将同步开启 log\n\n回复 /yes 确认  /no 取消", ct)
+                continue
+            if cmd.startswith("/debugoff"):
+                logger.info("执行 /debugoff")
+                _debug_mode = False
+                _save_state(debug_mode=False)
+                await sendmsg(client, tok, fu, "Debug 模式已关闭", ct)
+                continue
+            if cmd.startswith("/restart"):
+                logger.info("执行 /restart")
+                if not _debug_mode:
+                    await sendmsg(client, tok, fu, "当前模式不支持 /restart\n请先 /debug 开启 debug 模式", ct)
+                    continue
+                else:
+                    await sendmsg(client, tok, fu, "正在重启桥...", ct)
+                    logger.info("用户触发 /restart，正在重启")
+                    await asyncio.sleep(0.5)
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
                 continue
             # ── /resume 特殊处理 ──
             if cmd.startswith("/resume"):
@@ -707,31 +832,63 @@ async def handle(client, tok, raw):
                 continue
             # ── 通用命令穿透：注入 → 等 Claude 回复 → 发回 ──
             logger.info(f"穿透命令: {cmd}")
-            inject_to_terminal(text)
-            jsonl = sessions_jsonl()
-            sp = jsonl.stat().st_size if jsonl else 0
-            reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, sp, phase1_timeout=120)
-            if reply:
-                ok = await sendmsg(client, tok, fu, reply[:1500], ct)
-                logger.info(f"命令回复已发送 {'OK' if ok else 'FAIL'} len={len(reply)}")
-            else:
+            reply = await _inject_and_wait(client, tok, fu, ct, text, phase1_timeout=120)
+            if not reply:
                 await sendmsg(client, tok, fu, f"已执行 {text}", ct)
-                logger.warning("命令回复超时")
             continue
 
-        jsonl = sessions_jsonl()
-        sp = jsonl.stat().st_size if jsonl else 0
+        # ── 交互式选项答案（非命令文本）──
+        if awaiting_question_answer:
+            t = text.strip()
 
-        inject_to_terminal(text)
-        reply = await _wait_with_think(client, tok, fu, ct, jsonl, text, sp)
-        if reply:
-            ok = await sendmsg(client, tok, fu, reply, ct)
-            if ok:
-                logger.info(f"回复已发送 len={len(reply)}")
-            else:
-                logger.warning("回复发送失败")
-        else:
-            logger.warning("回复超时 (文本消息)")
+            # 确认阶段快捷回复：1=提交 2=取消（优先于答案校验）
+            if _answers_injected:
+                if t == "1":
+                    inject_enter()
+                    awaiting_question_answer = False
+                    _pending_questions = []
+                    _answers_injected = False
+                    try: await sendmsg(client, tok, fu, "已提交", ct)
+                    except Exception: pass
+                    continue
+                if t == "2":
+                    send_interrupt()
+                    awaiting_question_answer = False
+                    _pending_questions = []
+                    _answers_injected = False
+                    try: await sendmsg(client, tok, fu, "已取消", ct)
+                    except Exception: pass
+                    continue
+
+            # 校验答案格式（A2B13C4 或纯数字）
+            answers = validate_answer(t, _pending_questions)
+            if answers:
+                special = inject_answers(answers, _pending_questions)
+                if special:
+                    q_idx, kind = special
+                    prefix = chr(ord('A') + q_idx)
+                    awaiting_question_answer = False
+                    _pending_questions = []
+                    _answers_injected = False
+                    try: await sendmsg(client, tok, fu, f"[{prefix}] 已选择「{kind}」", ct)
+                    except Exception: pass
+                else:
+                    _answers_injected = True
+                    try: await sendmsg(client, tok, fu, format_confirmation(answers, _pending_questions), ct)
+                    except Exception: pass
+                continue
+
+            # 不匹配 → /stop 取消选择器，作为普通文本注入并等待回复
+            send_interrupt()
+            awaiting_question_answer = False
+            _pending_questions = []
+            _answers_injected = False
+            time.sleep(0.5)
+            logger.info(f"选择器取消，文本注入: {text[:60]}")
+            await _inject_and_wait(client, tok, fu, ct, text)
+            continue
+
+        await _inject_and_wait(client, tok, fu, ct, text)
 
 # ── main ──
 async def main():
@@ -771,18 +928,28 @@ async def main():
 
     if LAST_USER_FILE.exists():
         try: last_user = json.loads(LAST_USER_FILE.read_text(encoding="utf-8"))
-        except:
+        except Exception:
             logger.debug("无法加载 last_user.json")
 
     buf = ""
     if BUF_FILE.exists():
         try: buf = json.loads(BUF_FILE.read_text()).get("buf", "")
-        except:
+        except Exception:
             logger.debug("无法加载 cursor.json")
 
     async with httpx.AsyncClient(proxy=None, trust_env=False) as client:
         cli_g = client
         asyncio.create_task(check_approval())  # 启动审核监听
+
+        # 启动通知
+        if last_user and tok:
+            try:
+                await sendmsg(client, tok, last_user.get("to_user", ""),
+                              "桥已启动成功", last_user.get("ctx_token", ""))
+                logger.info("启动通知已发送")
+            except Exception:
+                logger.debug("启动通知发送失败", exc_info=True)
+
         print(" 监听中...\n")
         ec = 0
         net_ec = 0  # 网络异常计数（独立于 API 错误）

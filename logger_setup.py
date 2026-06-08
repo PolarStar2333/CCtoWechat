@@ -38,7 +38,3 @@ def setup_logging():
     ch.setLevel(console_level)
     ch.setFormatter(logging.Formatter(_FORMAT, _DATE_FORMAT))
     root.addHandler(ch)
-
-
-def get_logger(name):
-    return logging.getLogger(name)

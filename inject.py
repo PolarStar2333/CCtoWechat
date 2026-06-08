@@ -49,8 +49,8 @@ def _inject_keys(*vks):
         user32 = ctypes.windll.user32
         KEYUP = 0x0002
         for vk in vks:
-            user32.keybd_event(vk, 0, 0, 0); time.sleep(0.03)
-            user32.keybd_event(vk, 0, KEYUP, 0); time.sleep(0.02)
+            user32.keybd_event(vk, 0, 0, 0); time.sleep(0.05)
+            user32.keybd_event(vk, 0, KEYUP, 0); time.sleep(0.05)
     elif _OSX:
         MAP = {0x28: 125, 0x0D: 36, 0x1B: 53}  # Down/Return/Escape
         for vk in vks:
@@ -59,7 +59,7 @@ def _inject_keys(*vks):
                 f'tell app "System Events" to key code {code}'], check=False)
             if r.returncode != 0:
                 logger.debug(f"osascript key code {code} 失败 rc={r.returncode}")
-            time.sleep(0.03)
+            time.sleep(0.05)
     else:
         MAP = {0x28: "Down", 0x0D: "Return", 0x1B: "Escape"}
         for vk in vks:
@@ -67,7 +67,23 @@ def _inject_keys(*vks):
             r = subprocess.run(["xdotool", "key", key], check=False)
             if r.returncode != 0:
                 logger.debug(f"xdotool key {key} 失败 rc={r.returncode}")
-            time.sleep(0.03)
+            time.sleep(0.05)
+
+
+def inject_enter():
+    """注入 Enter 键（提交交互式选择器）"""
+    _inject_keys(0x0D)
+
+
+def inject_down_enter(n_down):
+    """Down×n_down + Enter（相对位移，多选用）"""
+    VK_DOWN, VK_RET = 0x28, 0x0D
+    _inject_keys(*([VK_DOWN] * n_down + [VK_RET]))
+
+
+def inject_tab():
+    """注入 Tab 键（切换问题/导航到提交按钮）"""
+    _inject_keys(0x09)
 
 
 def send_interrupt():
@@ -120,34 +136,31 @@ def select_session(num):
         _inject_keys(*([VK_DOWN] * (num - 1) + [VK_RET]))
 
 
+# ── Windows SendInput 结构体（模块级，避免重复定义）──
+from ctypes import wintypes
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                ("dwExtraInfo", wintypes.WPARAM)]
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", wintypes.WPARAM)]
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD),
+                ("wParamH", wintypes.WORD)]
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT), ("hi", _HARDWAREINPUT)]
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
+
+
 # ── 文本注入 ──
-def _make_input_structs():
-    """构建 INPUT 等结构体（复用，避免重复定义）"""
-    from ctypes import wintypes
-
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
-                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
-                    ("dwExtraInfo", wintypes.WPARAM)]
-
-    class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
-                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
-                    ("time", wintypes.DWORD), ("dwExtraInfo", wintypes.WPARAM)]
-
-    class HARDWAREINPUT(ctypes.Structure):
-        _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD),
-                    ("wParamH", wintypes.WORD)]
-
-    class INPUT_UNION(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
-
-    class INPUT(ctypes.Structure):
-        _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
-
-    return INPUT, INPUT_UNION, KEYBDINPUT
-
-
 def _inject_win_sendinput(text):
     """SendInput 模拟 Ctrl+V 粘贴（利用剪贴板原子性，多行不被打断）"""
     user32 = ctypes.windll.user32
@@ -165,29 +178,28 @@ def _inject_win_sendinput(text):
 
     # 2) Ctrl+V 粘贴（SendInput 模拟，绕过终端粘贴警告）
     inputs = []
-    INPUT, _, _ = _make_input_structs()
     INPUT_KEYBOARD = 1
 
     # Ctrl down
-    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp = _INPUT(); inp.type = INPUT_KEYBOARD
     inp.u.ki.wVk = VK_CTRL
     inputs.append(inp)
     # V down
-    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp = _INPUT(); inp.type = INPUT_KEYBOARD
     inp.u.ki.wVk = VK_V
     inputs.append(inp)
     time.sleep(0.05)
     # V up
-    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp = _INPUT(); inp.type = INPUT_KEYBOARD
     inp.u.ki.wVk = VK_V; inp.u.ki.dwFlags = KEYUP
     inputs.append(inp)
     # Ctrl up
-    inp = INPUT(); inp.type = INPUT_KEYBOARD
+    inp = _INPUT(); inp.type = INPUT_KEYBOARD
     inp.u.ki.wVk = VK_CTRL; inp.u.ki.dwFlags = KEYUP
     inputs.append(inp)
 
-    INPUT_ARRAY = INPUT * len(inputs)
-    sent = user32.SendInput(len(inputs), INPUT_ARRAY(*inputs), ctypes.sizeof(INPUT))
+    INPUT_ARRAY = _INPUT * len(inputs)
+    sent = user32.SendInput(len(inputs), INPUT_ARRAY(*inputs), ctypes.sizeof(_INPUT))
     if sent < len(inputs):
         raise OSError(f"仅发送 {sent}/{len(inputs)}")
 
