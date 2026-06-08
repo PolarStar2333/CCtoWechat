@@ -63,9 +63,13 @@ async def wait_qrcode_scan(qrcode):
         except httpx.TimeoutException:
             return {"status": "wait"}
 
+QR_FILE = ROOT / "qr_url.txt"  # 当前登录二维码，HTTP /qr 端点提供手机端扫码
+
 async def login():
     qrcode, qr_url = await get_bot_qrcode()
+    QR_FILE.write_text(qr_url)
     print(f"\n 请用微信扫描：\n   {qr_url}\n  等待扫码...")
+    logger.info("已生成登录二维码")
     refresh = 0
     while True:
         r = await wait_qrcode_scan(qrcode)
@@ -74,13 +78,15 @@ async def login():
             creds = {"token": r["bot_token"], "base_url": r.get("baseurl", API_BASE),
                      "bot_id": r.get("ilink_bot_id", ""), "user_id": r.get("ilink_user_id", "")}
             CRED_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+            QR_FILE.unlink(missing_ok=True)
             logger.info(f"登录成功 bot_id={creds['bot_id']}")
             return creds
         if s == "expired":
             refresh += 1
             if refresh >= CONFIG["max_qr_refresh"]: return None
             qrcode, qr_url = await get_bot_qrcode()
-            print(f"   已刷新({refresh}/3)：\n   {qr_url}")
+            QR_FILE.write_text(qr_url)
+            print(f"   已刷新({refresh}/{CONFIG['max_qr_refresh']})：\n   {qr_url}")
         elif s == "scaned":
             print("   已扫码，手机上确认...")
         await asyncio.sleep(CONFIG["poll_interval"])
@@ -157,6 +163,29 @@ async def http_handler(reader, writer):
     try:
         data = await asyncio.wait_for(reader.read(65536), timeout=10)
         body = data.decode("utf-8", errors="replace")
+        # GET /qr → 重定向到微信扫码 URL
+        if body.startswith("GET /qr"):
+            if QR_FILE.exists():
+                qr_url = QR_FILE.read_text().strip()
+                redirect = (
+                    "HTTP/1.1 302 Found\r\n"
+                    f"Location: {qr_url}\r\n"
+                    "Content-Type: text/html; charset=utf-8\r\n"
+                    "Content-Length: 0\r\n\r\n"
+                ).encode()
+                writer.write(redirect)
+            else:
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\n\r\n(no qr)")
+            await writer.drain(); writer.close()
+            return
+        # GET / → 简单状态页
+        if body.startswith("GET / ") or body.startswith("GET / HTTP"):
+            status = "运行中" if tok_g else "未登录"
+            html = f"<html><meta charset=utf-8><body><h3>CCtoWechat Bridge</h3><p>{status}</p></body></html>"
+            resp = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(html.encode())}\r\n\r\n{html}"
+            writer.write(resp.encode()); await writer.drain(); writer.close()
+            return
+        # POST /send → 主动发消息
         if "POST" in body and "/send" in body:
             for line in body.split("\r\n"):
                 if not line.startswith("{"):
@@ -181,7 +210,7 @@ async def http_handler(reader, writer):
 
 async def start_http():
     srv = await asyncio.start_server(http_handler, CONFIG["http_host"], CONFIG["http_port"])
-    print(f" HTTP: http://{CONFIG['http_host']}:{CONFIG['http_port']}")
+    print(f" HTTP: http://{CONFIG['http_host']}:{CONFIG['http_port']}  /qr=scan")
     return srv
 
 # ── 思考中通知 ──
@@ -765,49 +794,48 @@ async def main():
         asyncio.create_task(check_approval())  # 启动审核监听
         print(" 监听中...\n")
         ec = 0
+        net_ec = 0  # 网络异常计数（独立于 API 错误）
         short = CONFIG["retry"]["backoff_short"]
         long = CONFIG["retry"]["backoff_long"]
         thresh = CONFIG["retry"]["threshold"]
-        max_ec = CONFIG["retry"]["max_consecutive"]
         while True:
             try:
                 resp = await getupdates(client, tok, buf)
                 errc = resp.get("errcode", resp.get("ret", 0))
                 if errc != 0:
                     ec += 1
-                    if errc == -14 or ec >= max_ec:
-                        # session 过期或连续错误过多 → 重新登录
+                    if errc == -14:
+                        # 真正的 session 过期 → 必须重新登录
                         CRED_FILE.unlink(missing_ok=True)
-                        logger.warning(f"需要重新登录 (errcode={errc}, 连续错误={ec})")
+                        logger.warning("Session 已过期，重新登录")
                         creds = await login()
-                        if creds is None:
-                            logger.error("重新登录失败，退出")
-                            return
+                        if creds is None: logger.error("重新登录失败，退出"); return
                         tok = creds["token"]; tok_g = tok
-                        ec = 0
+                        ec = 0; net_ec = 0
                         logger.info("重新登录成功")
                         continue
+                    # 其他 API 错误 → 退避重试，不重新登录
                     w = short if ec <= thresh else long
                     logger.warning(f"API 错误 errcode={errc} {w}s后重试 (连续{ec}次)")
                     await asyncio.sleep(w); continue
-                ec = 0
+                ec = 0; net_ec = 0
                 for msg in resp.get("msgs", []):
                     asyncio.create_task(handle(client, tok, msg))
                 nb = resp.get("get_updates_buf", "")
                 if nb and nb != buf: buf = nb; BUF_FILE.write_text(json.dumps({"buf": nb}))
             except KeyboardInterrupt: print("\n 停止"); break
-            except Exception as e:
-                ec += 1; w = short if ec <= thresh else long
-                logger.exception(f"主循环异常 (连续{ec}次)")
-                if ec >= max_ec:
+            except Exception:
+                ec += 1; net_ec += 1
+                w = short if ec <= thresh else long
+                logger.exception(f"主循环异常 (连续{ec}次, 网络{net_ec}次)")
+                # 网络异常超过 30 次（约 15 分钟）→ 可能是 DNS/网络变更，尝试重新登录
+                if net_ec >= 30:
                     CRED_FILE.unlink(missing_ok=True)
-                    logger.warning("连续异常过多，尝试重新登录")
+                    logger.warning("长时间网络异常，尝试重新登录")
                     creds = await login()
-                    if creds is None:
-                        logger.error("重新登录失败，退出")
-                        return
+                    if creds is None: logger.error("重新登录失败，退出"); return
                     tok = creds["token"]; tok_g = tok
-                    ec = 0; logger.info("重新登录成功")
+                    ec = 0; net_ec = 0; logger.info("重新登录成功")
                 await asyncio.sleep(w)
     srv.close()
 
