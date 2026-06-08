@@ -213,22 +213,13 @@ async def start_http():
     print(f" HTTP: http://{CONFIG['http_host']}:{CONFIG['http_port']}  /qr=scan")
     return srv
 
-# ── 思考中通知 ──
-async def _wait_with_think(client, tok, fu, ct, jsonl, text, sp, notify_after=None, **kw):
-    if notify_after is None:
-        notify_after = CONFIG["thinking_notify_after"]
-    """等待 Claude 回复，超过 notify_after 秒给微信发'思考中'，缓解长时间无响应"""
-    notified = False
-    async def notify():
-        await asyncio.sleep(notify_after)
-        nonlocal notified; notified = True
-        try: await sendmsg(client, tok, fu, "Claude 思考中...", ct)
+# ── API 响应通知 ──
+async def _wait_with_think(client, tok, fu, ct, jsonl, text, sp, **kw):
+    """等待 Claude 回复，检测到 API 开始输出时通知微信"""
+    async def on_respond():
+        try: await sendmsg(client, tok, fu, "API 开始返回", ct)
         except: pass
-    task = asyncio.create_task(notify())
-    try:
-        return await wait_reply(jsonl, text, sp, **kw)
-    finally:
-        task.cancel()
+    return await wait_reply(jsonl, text, sp, on_first_respond=on_respond, **kw)
 # ── 审核模式 ──
 pending_approval = False
 last_notified = ""  # 上次通知内容，用于去重

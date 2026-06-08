@@ -23,7 +23,6 @@ _DEFAULTS = {
         "backoff_short": 2, "backoff_long": 30,
         "threshold": 3, "max_consecutive": 5,
     },
-    "thinking_notify_after": 30,
     "log": {"max_bytes": 1_000_000, "backup_count": 5, "console_level": "INFO"},
 }
 

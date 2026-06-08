@@ -21,7 +21,6 @@
     "threshold": 3,
     "max_consecutive": 5
   },
-  "thinking_notify_after": 30,
   "log": {
     "max_bytes": 1000000,
     "backup_count": 5,

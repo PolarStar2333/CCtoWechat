@@ -220,7 +220,12 @@ def get_last_reply():
 
 # ── 回复等待（两阶段轮询）──
 
-async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
+async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600,
+                    on_first_respond=None):
+    """
+    两阶段轮询：阶段1找到用户消息，阶段2等待 assistant end_turn。
+    on_first_respond: 可选异步回调，检测到 assistant 首次输出内容时触发（仅一次）。
+    """
     logger.debug(f"阶段1: 扫描全部JSONL查找用户消息 (inject_text={inject_text[:50]}...)")
     snapshots = {}
     for f in _all_jsonl():
@@ -253,12 +258,24 @@ async def wait_reply(jsonl, inject_text, start_pos, phase1_timeout=600):
 
     logger.debug(f"阶段2: 在 {jsonl.name} 中等待assistant回复...")
     _poll_count = 0
+    _first_notified = False
     while True:
         sp = snapshots.get(str(jsonl), 0)
         lines, new_pos = await asyncio.to_thread(_read_new, jsonl, sp)
         if lines:
             snapshots[str(jsonl)] = new_pos
             all_lines.extend(lines)
+            # 检测 assistant 首次输出 → 触发回调（比 end_turn 早得多）
+            if not _first_notified and on_first_respond:
+                for ln in lines:
+                    try: obj = json.loads(ln)
+                    except: continue
+                    msg = obj.get("message") or obj
+                    if msg.get("role") == "assistant" and _text(msg).strip():
+                        _first_notified = True
+                        try: await on_first_respond()
+                        except: pass
+                        break
             ei = _find_end_turn(all_lines)
             if ei is not None:
                 texts = _collect_all_text(all_lines[:ei + 1])
