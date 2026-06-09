@@ -769,9 +769,10 @@ async def handle(client, tok, raw):
         # 远程命令：所有 / 开头直接穿透给终端
         if _is_remote_cmd(text):
             cmd = text.strip().lower()
+            cmd_word = cmd.split()[0]
             audit("cmd", cmd=cmd)
             # ── CCtoWechat 本地命令（不注入终端）──
-            if cmd.startswith("/stop"):
+            if cmd_word == "/stop":
                 logger.info("执行 /stop")
                 send_interrupt()
                 awaiting_question_answer = False
@@ -784,7 +785,7 @@ async def handle(client, tok, raw):
                 awaiting_image_action = False
                 await sendmsg(client, tok, fu, "已发送中断信号", ct)
                 continue
-            if cmd.startswith("/imageloc"):
+            if cmd_word == "/imageloc":
                 parts = text.strip().split(maxsplit=1)
                 if len(parts) > 1:
                     new_path = Path(parts[1]); new_path.mkdir(parents=True, exist_ok=True)
@@ -817,16 +818,16 @@ async def handle(client, tok, raw):
                 logger.info(f"模型列表已发送 cur={cur_alias}")
                 await sendmsg(client, tok, fu, out, ct)
                 continue
-            if cmd.startswith("/status"):
+            if cmd_word == "/status":
                 await _send_stats(client, tok, fu, ct, format_stats, "/status")
                 continue
-            if cmd.startswith("/usage"):
+            if cmd_word == "/usage":
                 await _send_stats(client, tok, fu, ct, format_usage, "/usage")
                 continue
-            if cmd.startswith("/cost"):
+            if cmd_word == "/cost":
                 await _send_stats(client, tok, fu, ct, format_cost, "/cost")
                 continue
-            if cmd.startswith("/permissions"):
+            if cmd_word == "/permissions":
                 logger.info("执行 /permissions")
                 try:
                     parts = text.strip().split(maxsplit=1)
@@ -889,16 +890,16 @@ async def handle(client, tok, raw):
                     logger.exception("/permissions 失败")
                     await sendmsg(client, tok, fu, f"/permissions 失败: {e}", ct)
                 continue
-            if cmd.startswith("/agents"):
+            if cmd_word == "/agents":
                 await _claude_subcmd(client, tok, fu, ct, ["agents"], "/agents")
                 continue
-            if cmd.startswith("/plugins"):
+            if cmd_word == "/plugins":
                 await _claude_subcmd(client, tok, fu, ct, ["plugin", "list"], "/plugins")
                 continue
-            if cmd.startswith("/mcp"):
+            if cmd_word == "/mcp":
                 await _claude_subcmd(client, tok, fu, ct, ["mcp", "list"], "/mcp")
                 continue
-            if cmd.startswith("/help"):
+            if cmd_word == "/help":
                 logger.info("执行 /help")
                 out = """CCtoWechat 命令
 
@@ -933,13 +934,13 @@ async def handle(client, tok, raw):
 /help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
-            if cmd.startswith("/summaries"):
+            if cmd_word == "/summaries":
                 on = toggle_summaries()
                 _save_state(ai_summaries=on)
                 logger.info(f"执行 /summaries 切换至 {'开启' if on else '关闭'}")
                 await sendmsg(client, tok, fu, f"AI 摘要已{'开启' if on else '关闭'}", ct)
                 continue
-            if cmd.startswith("/sitpulltime"):
+            if cmd_word == "/sitpulltime":
                 logger.info("执行 /sitpulltime")
                 parts = text.strip().split(maxsplit=1)
                 if len(parts) > 1:
@@ -956,12 +957,12 @@ async def handle(client, tok, raw):
                     cur = _load_state().get("sitpulltime", 2000)
                     await sendmsg(client, tok, fu, f"当前流式推送间隔: {cur}ms\n\n修改: /sitpulltime <毫秒数>  (1000-60000)", ct)
                 continue
-            if cmd.startswith("/log"):
+            if cmd_word == "/log":
                 logger.info("执行 /log")
                 log_text = get_log_text()
                 await sendmsg(client, tok, fu, log_text[:1500], ct)
                 continue
-            if cmd.startswith("/submit"):
+            if cmd_word == "/submit":
                 logger.info("执行 /submit")
                 if awaiting_question_answer:
                     awaiting_question_answer = False
@@ -972,18 +973,18 @@ async def handle(client, tok, raw):
                 else:
                     await sendmsg(client, tok, fu, "当前没有待提交的选项", ct)
                 continue
-            if cmd.startswith("/debug"):
+            if cmd_word == "/debug":
                 logger.info("执行 /debug")
                 _awaiting_debug_confirm = True
                 await sendmsg(client, tok, fu, "确认启动 /debug 模式？这将同步开启 log\n\n回复 /yes 确认  /no 取消", ct)
                 continue
-            if cmd.startswith("/debugoff"):
+            if cmd_word == "/debugoff":
                 logger.info("执行 /debugoff")
                 _debug_mode = False
                 _save_state(debug_mode=False)
                 await sendmsg(client, tok, fu, "Debug 模式已关闭", ct)
                 continue
-            if cmd.startswith("/restart"):
+            if cmd_word == "/restart":
                 logger.info("执行 /restart")
                 if not _debug_mode:
                     await sendmsg(client, tok, fu, "当前模式不支持 /restart\n请先 /debug 开启 debug 模式", ct)
@@ -996,7 +997,7 @@ async def handle(client, tok, raw):
                     os.execv(sys.executable, [sys.executable] + sys.argv)
                 continue
             # ── /resume 特殊处理 ──
-            if cmd.startswith("/resume"):
+            if cmd_word == "/resume":
                 logger.info("执行 /resume")
                 inject_to_terminal(text)
                 cur_sid = sessions_jsonl().stem if sessions_jsonl() else ""
