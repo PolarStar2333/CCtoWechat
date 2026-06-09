@@ -14,10 +14,9 @@ _root = None          # CCtoWechat 根目录
 _locked_jsonl = None  # 锁定的 JSONL 文件
 _use_ai_summaries = True  # AI 摘要开关
 
-# ── /now 实时监听缓冲区 ──
-_now_buffer = []       # 阶段2累积的 assistant 内容（含 tool_use 摘要）
-_now_cursor = 0         # get_now_snapshot 已输出的位置，只返回增量
-_now_active = False     # 是否正在监听（阶段2中）
+# ── 流式推送缓冲区 ──
+_stream_buffer = []       # 阶段2累积的 assistant 内容（含 tool_use 摘要）
+_stream_cursor = 0         # get_stream_delta 已输出的位置，只返回增量
 
 
 def init(session_dir, root, locked_jsonl=None):
@@ -47,38 +46,47 @@ def toggle_summaries():
     return _use_ai_summaries
 
 
-def reset_now_buffer():
+def reset_stream_buffer():
     """信号1触发时清空缓冲区，开始新一轮监听"""
-    global _now_buffer, _now_cursor, _now_active
-    _now_buffer = []
-    _now_cursor = 0
-    _now_active = True
+    global _stream_buffer, _stream_cursor
+    _stream_buffer = []
+    _stream_cursor = 0
 
 
-def is_now_active():
-    """/now 是否可用（阶段2进行中）"""
-    global _now_active
-    return _now_active
-
-
-def get_now_snapshot():
-    """返回 /now 快照：仅返回上次查询后新增的内容（去重）"""
-    global _now_buffer, _now_cursor
-    if not _now_buffer:
-        return "暂无内容，Claude 仍在思考中..."
-    new_items = _now_buffer[_now_cursor:]
-    _now_cursor = len(_now_buffer)
+def get_stream_delta():
+    """返回上次查询后新增的缓冲区内容，无新内容返回 None"""
+    global _stream_buffer, _stream_cursor
+    if not _stream_buffer:
+        return None
+    new_items = _stream_buffer[_stream_cursor:]
+    _stream_cursor = len(_stream_buffer)
     if not new_items:
-        return "(无新内容)"
+        return None
     full = "\n".join(new_items)
     if len(full) > 800:
         return "...\n" + full[-800:]
     return full
 
 
+async def _run_stream(on_chunk, interval_ms, stop_event):
+    """后台流式推送：每隔 interval_ms 毫秒抓取增量并回调"""
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_ms / 1000)
+            break
+        except asyncio.TimeoutError:
+            pass
+        delta = get_stream_delta()
+        if delta:
+            try:
+                await on_chunk(delta)
+            except Exception:
+                logger.debug("stream chunk 回调失败", exc_info=True)
+
+
 # ── JSONL 基础操作 ──
 
-def _jsonl():
+def get_jsonl():
     """全局扫描所有项目目录，找最近修改的 JSONL"""
     global _locked_jsonl
     if _locked_jsonl:
@@ -110,8 +118,43 @@ def _text(msg):
     return ""
 
 
+def _tool_summary(name, inp):
+    """工具调用 → 一行简述，避免原文刷屏"""
+    if name == "Bash":
+        cmd = str(inp.get("command", "")).strip().split("\n")[0][:80]
+        return f"执行: {cmd}"
+    if name == "Read":
+        fp = inp.get("file_path", "?")
+        return f"读取: {Path(fp).name}"
+    if name == "Write":
+        fp = inp.get("file_path", "?")
+        return f"写入: {Path(fp).name}"
+    if name == "Edit":
+        fp = inp.get("file_path", "?")
+        return f"编辑: {Path(fp).name}"
+    if name == "Grep":
+        return f"搜索: {str(inp.get('pattern', '?'))[:60]}"
+    if name == "Glob":
+        return f"查找: {str(inp.get('pattern', '?'))[:60]}"
+    if name == "WebFetch":
+        return f"访问网页: {str(inp.get('url', '?'))[:60]}"
+    if name == "WebSearch":
+        return f"搜索网页: {str(inp.get('query', '?'))[:60]}"
+    if name == "AskUserQuestion":
+        qs = inp.get("questions", [])
+        headers = ",".join(q.get("header", "?") for q in qs[:2])
+        return f"询问: {headers}"
+    if name == "TaskCreate":
+        return f"创建任务: {str(inp.get('subject', '?'))[:60]}"
+    if name == "TaskUpdate":
+        return "更新任务状态"
+    if name == "Agent":
+        return f"启动 Agent: {str(inp.get('description', '?'))[:60]}"
+    return f"工具: {name}"
+
+
 def _assistant_snippet(msg):
-    """提取 assistant 消息的可读摘要（text + tool_use 名称/输入）"""
+    """提取 assistant 消息的可读摘要（text + 工具简述）"""
     c = msg.get("content", [])
     if isinstance(c, str): return c[:300]
     parts = []
@@ -124,8 +167,7 @@ def _assistant_snippet(msg):
             elif t == "tool_use":
                 name = it.get("name", "?")
                 inp = it.get("input", {})
-                inp_str = str(inp)[:200] if inp else ""
-                parts.append(f"[工具调用: {name}]\n{inp_str}")
+                parts.append(_tool_summary(name, inp))
     return "\n".join(parts)
 
 
@@ -253,7 +295,7 @@ def get_session_list(exclude_sid=""):
 
 def get_last_reply():
     """读取当前 JSONL 中最后一条 assistant end_turn 回复"""
-    jsonl = _jsonl()
+    jsonl = get_jsonl()
     if not jsonl: return ""
     try:
         with open(jsonl, "r", encoding="utf-8", errors="replace") as f:
@@ -281,15 +323,17 @@ def get_last_reply():
 
 async def wait_reply(jsonl, inject_text, phase1_timeout=600,
                     on_first_respond=None, on_user_found=None, on_tool_use=None,
-                    on_ask_user_question=None):
+                    on_ask_user_question=None, on_stream_chunk=None, stream_interval=2000):
     """
     两阶段轮询：阶段1找到用户消息，阶段2等待 assistant end_turn。
     on_user_found: 阶段1找到用户消息时触发（信号1：注入成功确认）。
     on_tool_use: 阶段2首次检测到 tool_use 时触发（信号2：工具调用）。
     on_ask_user_question: 阶段2检测到 AskUserQuestion 时触发（交互式选项）。
     on_first_respond: 阶段2首次检测到 assistant 文本输出时触发（信号3：API开始返回）。
+    on_stream_chunk: 阶段2增量内容回调，用于自动流式推送到微信。
+    stream_interval: 流式推送间隔（毫秒），默认 2000。
     """
-    global _now_buffer, _now_active
+    global _stream_buffer
     logger.debug(f"阶段1: 扫描全部JSONL查找用户消息 (inject_text={inject_text[:50]}...)")
     snapshots = {}
     for f in _all_jsonl():
@@ -312,15 +356,13 @@ async def wait_reply(jsonl, inject_text, phase1_timeout=600,
                 if ei is not None:
                     texts = _collect_all_text(all_lines[:ei + 1])
                     if texts:
-                        _now_active = False
                         return "\n\n".join(texts)
                 break
             if lines: snapshots[key] = new_pos
         if found: break
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
     else:
         logger.warning(f"回复超时: 阶段1未找到用户消息 (inject_text={inject_text[:50]}...)")
-        _now_active = False
         return None
 
     # 信号1：用户消息已确认 → 注入成功
@@ -333,28 +375,33 @@ async def wait_reply(jsonl, inject_text, phase1_timeout=600,
     first_notified = False
     tool_notified = False
     ask_notified = False
+    stream_task = None
+    stream_stop = asyncio.Event()
     while True:
         sp = snapshots.get(str(jsonl), 0)
         lines, new_pos = await asyncio.to_thread(_read_new, jsonl, sp)
         if lines:
             snapshots[str(jsonl)] = new_pos
             all_lines.extend(lines)
-            # 累积 assistant 内容到 /now 缓冲区
+            # 累积 assistant 内容到流式推送缓冲区
+            batch_tools = []
             for ln in lines:
                 try: obj = json.loads(ln)
                 except Exception: continue
                 msg = obj.get("message") or obj
                 if msg.get("role") == "assistant":
                     snippet = _assistant_snippet(msg)
-                    if snippet.strip():
-                        _now_buffer.append(snippet.strip())
-                    # 信号2：首次检测到 tool_use
-                    if not tool_notified and on_tool_use:
-                        if any(isinstance(c, dict) and c.get("type") == "tool_use"
-                               for c in msg.get("content", [])):
+                    has_tool = any(isinstance(c, dict) and c.get("type") == "tool_use"
+                                   for c in msg.get("content", []))
+                    if has_tool:
+                        if not tool_notified and on_tool_use:
                             tool_notified = True
                             try: await on_tool_use()
                             except Exception: pass
+                        if snippet.strip():
+                            batch_tools.append(snippet.strip())
+                    elif snippet.strip():
+                        _stream_buffer.append(snippet.strip())
                     # 交互式选项：检测 AskUserQuestion
                     if not ask_notified and on_ask_user_question:
                         for c in msg.get("content", []):
@@ -365,6 +412,10 @@ async def wait_reply(jsonl, inject_text, phase1_timeout=600,
                                     try: await on_ask_user_question(questions)
                                     except Exception: pass
                                 break
+            # 批量发送工具摘要（一次 sendmsg，避免 API 限流）
+            if batch_tools and on_stream_chunk:
+                try: await on_stream_chunk("\n".join(batch_tools))
+                except Exception: pass
             # 信号3：首次文本输出（比 end_turn 早）
             if not first_notified and on_first_respond:
                 for ln in lines:
@@ -375,27 +426,36 @@ async def wait_reply(jsonl, inject_text, phase1_timeout=600,
                         first_notified = True
                         try: await on_first_respond()
                         except Exception: pass
+                        # 启动后台流式推送
+                        if on_stream_chunk and not stream_task:
+                            stream_stop.clear()
+                            stream_task = asyncio.create_task(
+                                _run_stream(on_stream_chunk, stream_interval, stream_stop))
                         break
             ei = _find_end_turn(all_lines)
             if ei is not None:
                 texts = _collect_all_text(all_lines[:ei + 1])
                 if texts:
-                    _now_active = False
+                    if stream_task:
+                        stream_stop.set()
+                        stream_task.cancel()
                     return "\n\n".join(texts)
         poll_count += 1
-        if poll_count % 30 == 0:
-            logger.debug(f"阶段2轮询中: 已等待{poll_count}s, 当前行数={len(all_lines)}")
-        await asyncio.sleep(1)
+        if poll_count % 60 == 0:
+            logger.debug(f"阶段2轮询中: 已等待{poll_count // 2}s, 当前行数={len(all_lines)}")
+        await asyncio.sleep(0.5)
 
 
 # ── 会话统计（/status /usage /cost 用）──
 
 # 标准 Claude 模型定价 ($/M tokens)，自定义模型返回 None
 MODEL_PRICING = {
+    "claude-opus-4": (15, 75),
     "claude-opus": (15, 75),
+    "claude-sonnet-4": (3, 15),
     "claude-sonnet": (3, 15),
-    "claude-haiku": (0.8, 4),
     "claude-haiku-4": (0.8, 4),
+    "claude-haiku": (0.8, 4),
 }
 
 
@@ -413,7 +473,7 @@ def _get_pricing(model_name):
 def get_session_stats(jsonl_path=None):
     """从 JSONL 统计 token 用量，返回 dict 或 None"""
     if jsonl_path is None:
-        jsonl_path = _jsonl()
+        jsonl_path = get_jsonl()
     if not jsonl_path or not jsonl_path.exists():
         return None
     logger.debug(f"读取会话统计: {jsonl_path.name}")
@@ -529,7 +589,8 @@ def find_session_dir():
     """自动探测 Claude Code 项目目录"""
     base = Path.home() / ".claude" / "projects"
     if not base.exists():
-        return base / "C--Users-zshyl"
+        cwd = str(Path.cwd()).replace(":", "-").replace("\\", "-").replace("/", "-")
+        return base / cwd
     best = None; best_time = 0
     for d in base.iterdir():
         if d.is_dir():

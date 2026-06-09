@@ -32,6 +32,10 @@ def setup_logging():
     fh.setFormatter(logging.Formatter(_FORMAT, _DATE_FORMAT))
     root.addHandler(fh)
 
+    # 抑制第三方库 debug 日志，避免日志爆炸
+    for noisy in ("httpcore", "httpx", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     # 控制台：可配置级别
     console_level = getattr(logging, _log_cfg.get("console_level", "INFO").upper(), logging.INFO)
     ch = logging.StreamHandler()

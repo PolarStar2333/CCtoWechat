@@ -14,8 +14,7 @@ Claude Code 接入个人微信。纯 Python 实现，消息注入终端，微信
 
 - **继承终端对话** — 不依赖 Agent SDK，直接模拟键盘注入 Claude Code 终端。已有的对话上下文、权限设置、模型选择原封不动，微信只是换了个对话框
 - **交互式选择器** — Claude 弹出多选/单选题时，微信收到格式化选项，回复 `[字母][数字]...` 即可远程选择。确认页支持 `1` 提交 `2` 取消
-- **三阶段进度通知** — 消息注入后微信依次收到「思考中...」→「使用工具...」→「API 开始返回」，实时了解 Claude 状态
-- **`/now` 实时查看** — 随时查看 Claude 当前在干什么（读文件、调工具、写代码），增量去重不刷屏
+- **实时状态反馈** — Claude 思考中、使用工具时微信实时通知（工具调用精简为一行摘要），API 返回后增量内容全量流式推送到微信。`/sitpulltime` 调整推送间隔
 - **远程权限审核** — 人不在电脑前，Claude 弹权限时微信收到通知，回复 `/yes` 批准、`/no` 拒绝。同一权限自动去重，不会重复骚扰
 - **远程重启** — `/debug` → `/yes` → `/restart` 远程重启桥接，debug 状态持久化
 - **开机自启** — 放入启动文件夹，开机自动启动桥接
@@ -23,7 +22,7 @@ Claude Code 接入个人微信。纯 Python 实现，消息注入终端，微信
 - **跨平台** —支持 Windows / macOS / Linux。由于HarmonyOS缺失组件过多，HMPC暂不支持
 - **AI 摘要会话列表** — `/resume` 显示的摘要由 AI 生成，比 Claude Code 自带的更可读
 - **引用消息处理** — 微信引用文字消息，自动拼接 `「被引用内容」`；引用文件/图片，自动下载解密拼路径到终端
-- **发图/发文件** — 桥接可将图片和文件发回微信，支持 HTTP `/send` 远程触发
+- **发图/发文件** — 桥接可将图片和文件发回微信
 
 ## 原理
 
@@ -123,7 +122,7 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 |------|------|
 | `/resume` | AI 摘要会话列表 + 回复数字方向键选会话 |
 | `/stop` | Ctrl+C 中断当前操作 + 清空输入栏 |
-| `/now` | 查看 Claude 当前思考进度（增量去重） |
+| `/sitpulltime [ms]` | 查看/设置流式推送间隔（默认 2000ms） |
 | `/submit` | 提交交互式选择器答案 |
 | `/clear` | 清空上下文 |
 | `/compact` | 压缩上下文省 token |
@@ -141,8 +140,9 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 | `/debugoff` | 关闭 debug 模式 |
 | `/restart` | 远程重启桥接（需 debug 模式） |
 | `/imageloc [路径]` | 查看 / 设置图片和文件保存路径 |
+| `/log` | 发送审计日志（过去24h，仅元数据不含内容） |
 
-全部命令可混用，不注入终端的本地命令（`/summaries` `/imageloc` `/debug` `/debugoff` `/restart`）桥接本地处理。
+全部命令可混用，不注入终端的本地命令（`/summaries` `/sitpulltime` `/imageloc` `/debug` `/debugoff` `/restart` `/log`）桥接本地处理。
 
 ## 图片与文件
 
@@ -159,29 +159,19 @@ Windows 下 `start_bridge.bat` 已放入启动文件夹，开机自动启动。
 
 手动安装：`Win+R` → `shell:startup` → 放入 `start_bridge.bat`。
 
-## 主动发微信
+## 审计日志
 
-```bash
-# 发文字
-curl -X POST http://127.0.0.1:9876/send \
-  -H "Content-Type: application/json" \
-  -d '{"text": "你好"}'
+桥接自动记录运行时事件到 `audit.jsonl`，**仅记录元数据（字符数、行数、编码、事件类型），不记录任何用户输入内容**。日志自动清除超过 24 小时的条目。
 
-# 发图片
-curl -X POST http://127.0.0.1:9876/send \
-  -H "Content-Type: application/json" \
-  -d '{"image_path": "/path/to/image.jpg"}'
+发送 `/log` 即可在微信中收到过去 24 小时的审计摘要。
 
-# 发文件
-curl -X POST http://127.0.0.1:9876/send \
-  -H "Content-Type: application/json" \
-  -d '{"file_path": "/path/to/doc.pdf", "file_name": "report.pdf"}'
+### 日志打包与反馈
 
-# 发视频
-curl -X POST http://127.0.0.1:9876/send \
-  -H "Content-Type: application/json" \
-  -d '{"video_path": "/path/to/video.mp4"}'
-```
+如需提交日志协助排查问题，`audit.jsonl` 即为完整日志文件。将其作为附件发送至：
+
+**liyingzhen@cdjcc.edu.cn**
+
+日志内容不含用户消息原文、图片内容、文件内容，仅包含操作元数据。
 
 ## 命令行
 
@@ -203,6 +193,8 @@ python bridge.py --session <SESSION_ID> # 锁定特定会话
 ├── config.json              # 用户配置文件
 ├── state.json               # 持久化开关（debug/summaries）
 ├── session_summaries.json   # AI 会话摘要缓存
+├── audit.jsonl              # 审计日志（仅元数据，24h 滚动）
+├── auditlog.py              # 审计日志模块
 ├── index.html               # 完整部署教程
 ├── run.bat                  # Windows 一键启动
 ├── start_bridge.bat         # 开机自启脚本

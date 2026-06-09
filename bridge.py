@@ -24,10 +24,11 @@ from inject import inject_to_terminal, select_session, send_interrupt, inject_en
 from sessions import (init as sessions_init, set_locked_jsonl,
                       get_session_list, get_last_reply, wait_reply,
                       find_session_dir, toggle_summaries, set_summaries,
-                      _jsonl as sessions_jsonl,
+                      get_jsonl as sessions_jsonl,
                       get_session_stats, format_stats, format_usage, format_cost,
-                      reset_now_buffer, get_now_snapshot, is_now_active)
+                      reset_stream_buffer)
 from selector import format_questions, validate_answer, inject_answers, format_confirmation
+from auditlog import audit, get_log_text
 
 logger = logging.getLogger("bridge")
 
@@ -130,11 +131,55 @@ async def sendmsg(client, tok, to_user, text, ctx_token):
                 "message_state": 2, "context_token": ctx_token,
                 "item_list": [{"type": 1, "text_item": {"text": text}}]},
         "base_info": {"channel_version": CH_VERSION}}, headers=_hdrs(tok), timeout=CONFIG["timeouts"]["short"])
-    return r.status_code == 200
+    ok = r.status_code == 200
+    audit("tx_msg", chars=len(text), lines=text.count("\n") + 1, ok=ok)
+    return ok
+
+
+def _decrypt_media(data, key_material):
+    """AES 解密 iLink 媒体数据。自动识别密钥格式，尝试 ECB/CBC，PKCS7 去填充。
+    解密失败返回原始数据。"""
+    if not key_material:
+        return data
+    key = None
+    try:
+        key = bytes.fromhex(key_material)
+    except Exception:
+        pass
+    if key is None:
+        try:
+            key = bytes.fromhex(base64.b64decode(key_material).decode("ascii"))
+        except Exception:
+            pass
+    if key is None:
+        try:
+            key = base64.b64decode(key_material)
+        except Exception:
+            pass
+    if key is None:
+        return data
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError:
+        return data
+    last = data
+    for cipher in [
+        Cipher(algorithms.AES(key), modes.ECB()),
+        Cipher(algorithms.AES(key), modes.CBC(bytes(16))),
+    ]:
+        try:
+            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
+            pad = d[-1]
+            if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
+                return d[:-pad]
+            last = d
+        except Exception:
+            continue
+    return last
 
 
 async def _upload_media(client, tok, to_user, file_bytes, media_type):
-    """上传媒体到 CDN，返回 (download_param, aes_key_raw, raw_size) 或 (None, None, 0)
+    """上传媒体到 CDN，返回 (download_param, aes_key, raw_size, enc_size) 或 (None, None, 0, 0)
 
     media_type (iLink): 1=IMAGE 2=VIDEO 3=FILE
     """
@@ -319,20 +364,24 @@ async def http_handler(reader, writer):
                     to = last_user["to_user"]; ct = last_user["ctx_token"]
                     if "text" in payload:
                         ok = await sendmsg(cli_g, tok_g, to, payload["text"], ct)
-                        logger.info(f"主动发送文本 {'OK' if ok else 'FAIL'} text={payload['text'][:60]}")
+                        audit("push", action="主动发文本", chars=len(payload["text"]), lines=payload["text"].count("\n") + 1)
+                        logger.info(f"主动发送文本 {'OK' if ok else 'FAIL'} chars={len(payload['text'])}")
                     elif "image_path" in payload:
                         img = Path(payload["image_path"]).read_bytes()
                         ok = await send_image(cli_g, tok_g, to, ct, img)
+                        audit("push", action="主动发图", chars=len(img), lines=0)
                         logger.info(f"主动发图 {'OK' if ok else 'FAIL'} path={payload['image_path']}")
                     elif "file_path" in payload:
                         fp = Path(payload["file_path"])
                         data = fp.read_bytes()
                         name = payload.get("file_name", fp.name)
                         ok = await send_file(cli_g, tok_g, to, ct, data, name)
+                        audit("push", action="主动发文件", chars=len(data), lines=0)
                         logger.info(f"主动发文件 {'OK' if ok else 'FAIL'} path={payload['file_path']}")
                     elif "video_path" in payload:
                         vid = Path(payload["video_path"]).read_bytes()
                         ok = await send_video(cli_g, tok_g, to, ct, vid)
+                        audit("push", action="主动发视频", chars=len(vid), lines=0)
                         logger.info(f"主动发视频 {'OK' if ok else 'FAIL'} path={payload['video_path']}")
     except Exception:
         logger.exception("HTTP handler 异常")
@@ -346,16 +395,21 @@ async def start_http():
 
 # ── API 响应通知 ──
 async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
-    """等待 Claude 回复，三阶段信号通知微信"""
-    reset_now_buffer()  # 新一轮监听开始
+    """等待 Claude 回复，三阶段信号通知微信 + 自动流式推送"""
+    reset_stream_buffer()  # 新一轮监听开始
+    _st = _load_state()
+    sitpull = _st.get("sitpulltime", 2000)
     async def on_user():
-        try: await sendmsg(client, tok, fu, "Claude 思考中...", ct)
+        try: await sendmsg(client, tok, fu, "思考中...", ct)
         except Exception: pass
     async def on_tool():
-        try: await sendmsg(client, tok, fu, "Claude 正在使用工具...", ct)
+        try: await sendmsg(client, tok, fu, "使用工具...", ct)
         except Exception: pass
     async def on_respond():
-        try: await sendmsg(client, tok, fu, "API 开始返回", ct)
+        try: await sendmsg(client, tok, fu, "回复中...", ct)
+        except Exception: pass
+    async def on_stream(delta):
+        try: await sendmsg(client, tok, fu, delta, ct)
         except Exception: pass
     async def on_question(questions):
         global awaiting_question_answer, _pending_questions
@@ -367,7 +421,8 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
     return await wait_reply(jsonl, text,
         on_user_found=on_user, on_tool_use=on_tool,
         on_first_respond=on_respond,
-        on_ask_user_question=on_question, **kw)
+        on_ask_user_question=on_question,
+        on_stream_chunk=on_stream, stream_interval=sitpull, **kw)
 
 
 async def _wait_and_reply(client, tok, fu, ct, text, **kw):
@@ -378,7 +433,7 @@ async def _wait_and_reply(client, tok, fu, ct, text, **kw):
         ok = await sendmsg(client, tok, fu, reply[:1500], ct)
         logger.info(f"回复已发送 {'OK' if ok else 'FAIL'} len={len(reply)}")
     else:
-        logger.warning(f"回复超时: {text[:60]}")
+        logger.warning(f"回复超时 chars={len(text)}")
     return reply
 
 
@@ -386,6 +441,34 @@ async def _inject_and_wait(client, tok, fu, ct, text, **kw):
     """注入终端 → 等待回复 → 发回微信"""
     inject_to_terminal(text)
     return await _wait_and_reply(client, tok, fu, ct, text, **kw)
+
+
+async def _claude_subcmd(client, tok, fu, ct, args, label):
+    """运行 claude 子命令并发送输出到微信"""
+    logger.info(f"执行 {label}")
+    try:
+        claude = shutil.which("claude") or "claude"
+        proc = subprocess.run([claude] + args, capture_output=True,
+                              text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
+        out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
+        await sendmsg(client, tok, fu, out, ct)
+    except FileNotFoundError:
+        await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
+    except Exception as e:
+        logger.exception(f"{label} 失败")
+        await sendmsg(client, tok, fu, f"{label} 失败: {e}", ct)
+
+
+async def _send_stats(client, tok, fu, ct, formatter, label):
+    """获取会话统计 → 格式化 → 发送到微信"""
+    logger.info(f"执行 {label}")
+    try:
+        s = get_session_stats()
+        out = formatter(s)
+        await sendmsg(client, tok, fu, out, ct)
+    except Exception as e:
+        logger.exception(f"{label} 失败")
+        await sendmsg(client, tok, fu, f"{label} 失败: {e}", ct)
 
 
 # ── 审核模式 ──
@@ -431,6 +514,47 @@ pending_is_file = False             # True=文件, False=图片
 
 IMAGES_DIR = ROOT / CONFIG["images_dir"]  # 默认保存位置
 
+
+async def _receive_media(client, tok, fu, ct, url, aes_key, suffix, *,
+                          media_type="图片", is_file=False, subdir=None,
+                          process=None):
+    """下载 → 解密 → 写盘 → 审计 → 通知（图片/文件接收共享流程）"""
+    save_dir = IMAGES_DIR
+    if subdir:
+        save_dir = save_dir / subdir
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / f"{int(time.time())}{suffix}"
+
+    logger.info(f"收到{media_type} url={url[:80]}")
+    await sendmsg(client, tok, fu, f"收到{media_type}，下载解密中...", ct)
+
+    try:
+        r = await client.get(url, timeout=CONFIG["timeouts"]["download"])
+        if r.status_code != 200:
+            await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
+            return False
+        data = r.content
+        if media_type == "图片":
+            save_path.with_suffix(".raw").write_bytes(data)
+            save_path.with_suffix(".key").write_text(aes_key, encoding="utf-8")
+        data = _decrypt_media(data, aes_key)
+        if process:
+            data = process(data)
+        save_path.write_bytes(data)
+
+        audit("media", action="收到", type=media_type, size=len(data), encoding="utf-8")
+        global pending_image_path, pending_is_file, awaiting_image_action
+        pending_image_path = str(save_path)
+        pending_is_file = is_file
+        awaiting_image_action = True
+        prompt = f"{media_type}已保存 ({len(data)//1024}KB)\n\n回复 /yes 仅注入{'路径' if is_file else '图片地址'}\n回复其他内容将一并注入"
+        await sendmsg(client, tok, fu, prompt, ct)
+        return True
+    except Exception as e:
+        await sendmsg(client, tok, fu, f"处理失败: {e}", ct)
+        return False
+
+
 def _is_remote_cmd(text):
     """只匹配纯英文 slash 命令（/字母开头，不含中文等非ASCII）"""
     t = text.strip()
@@ -462,49 +586,15 @@ async def handle(client, tok, raw):
             media = img.get("media", {})
             img_url = media.get("full_url", img.get("url", ""))
             aeskey_hex = img.get("aeskey", "")
-            logger.info(f"收到图片 from={fu[:20]} url={img_url[:80]}")
-            await sendmsg(client, tok, fu, "收到图片，下载解密中...", ct)
-            img_path = IMAGES_DIR / f"{int(time.time())}.jpg"
-            img_path.parent.mkdir(exist_ok=True)
-            try:
-                r = await client.get(img_url, timeout=CONFIG["timeouts"]["download"])
-                if r.status_code != 200:
-                    await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
-                    continue
-                data = r.content
-                # 调试：保存原始下载 + 密钥
-                img_path.with_suffix(".raw").write_bytes(data)
-                img_path.with_suffix(".key").write_text(aeskey_hex, encoding="utf-8")
-                # AES 解密（iLink 图片加密）
-                if aeskey_hex:
-                    try:
-                        key = bytes.fromhex(aeskey_hex)
-                        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-                        # 先 ECB 后 CBC（不同微信版本加密方式不同）
-                        for mode_desc, cipher in [
-                            ("ECB", Cipher(algorithms.AES(key), modes.ECB())),
-                            ("CBC", Cipher(algorithms.AES(key), modes.CBC(bytes(16)))),
-                        ]:
-                            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
-                            eoi = d.rfind(b'\xff\xd9')
-                            if eoi > 0 and d[:2] == b'\xff\xd8':
-                                data = d[:eoi + 2]; break
-                            if d[:2] == b'\xff\xd8':
-                                pad = d[-1]
-                                if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
-                                    data = d[:-pad]; break
-                        else:
-                            data = d
-                    except ImportError:
-                        logger.debug("cryptography 未安装，跳过图片AES解密")
-                img_path.write_bytes(data)
-                pending_image_path = str(img_path)
-                pending_is_file = False
-                awaiting_image_action = True
-                await sendmsg(client, tok, fu,
-                    f"图片已保存 ({len(data)//1024}KB)\n\n回复 /yes 仅注入图片地址\n回复其他内容将一并注入图片地址和文字", ct)
-            except Exception as e:
-                await sendmsg(client, tok, fu, f"处理失败: {e}", ct)
+
+            def _jpeg_trim(data):
+                eoi = data.rfind(b'\xff\xd9')
+                if eoi > 0 and data[:2] == b'\xff\xd8':
+                    return data[:eoi + 2]
+                return data
+
+            await _receive_media(client, tok, fu, ct, img_url, aeskey_hex, ".jpg",
+                                 media_type="图片", is_file=False, process=_jpeg_trim)
             continue
         # ── 文件消息 ──
         if item_type == 4:
@@ -515,46 +605,11 @@ async def handle(client, tok, raw):
             file_name = fitem.get("file_name", "unknown")
             file_size = int(fitem.get("len", 0))
             aeskey_b64 = media.get("aes_key", "")
-            logger.info(f"收到文件 from={fu[:20]} name={file_name} size={file_size//1024}KB")
-            await sendmsg(client, tok, fu, f"收到文件: {file_name} ({file_size//1024}KB)\n下载解密中...", ct)
-            file_path = Path(IMAGES_DIR) / "files" / file_name
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                r = await client.get(file_url, timeout=CONFIG["timeouts"]["download"])
-                if r.status_code != 200:
-                    await sendmsg(client, tok, fu, f"下载失败: HTTP {r.status_code}", ct)
-                    continue
-                data = r.content
-                # AES 解密（同图片）
-                if aeskey_b64:
-                    try:
-                        # aes_key 是 base64(hex_string)，需两次解码
-                        hex_str = base64.b64decode(aeskey_b64).decode("ascii")
-                        key = bytes.fromhex(hex_str)
-                        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-                        # 先 ECB 后 CBC（同图片逻辑）
-                        for mode_desc, cipher in [
-                            ("ECB", Cipher(algorithms.AES(key), modes.ECB())),
-                            ("CBC", Cipher(algorithms.AES(key), modes.CBC(bytes(16)))),
-                        ]:
-                            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
-                            if d[:2] == b'PK':  # ZIP/docx header
-                                pad = d[-1]
-                                if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
-                                    data = d[:-pad]; break
-                                data = d; break
-                        else:
-                            data = d  # fallback
-                    except ImportError:
-                        logger.debug("cryptography 未安装，跳过文件AES解密")
-                file_path.write_bytes(data)
-                pending_image_path = str(file_path)
-                pending_is_file = True
-                awaiting_image_action = True
-                await sendmsg(client, tok, fu,
-                    f"文件已保存 ({len(data)//1024}KB)\n\n回复 /yes 仅注入路径\n回复其他内容一并注入", ct)
-            except Exception as e:
-                await sendmsg(client, tok, fu, f"处理失败: {e}", ct)
+
+            subdir = "files"
+            suffix = Path(file_name).suffix or ".bin"
+            await _receive_media(client, tok, fu, ct, file_url, aeskey_b64, suffix,
+                                 media_type="文件", is_file=True, subdir=subdir)
             continue
         if item_type != 1: continue
         text = item.get("text_item", {}).get("text", "").strip()
@@ -572,7 +627,6 @@ async def handle(client, tok, raw):
             elif ref_type in (2, 4):
                 # 引用文件/图片 → 下载解密，路径拼到消息前
                 try:
-                    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
                     is_img = ref_type == 2
                     if is_img:
                         ri = ref_item.get("image_item", {})
@@ -592,34 +646,12 @@ async def handle(client, tok, raw):
                         rdl = await client.get(dl_url, timeout=CONFIG["timeouts"]["download"])
                         if rdl.status_code == 200:
                             data = rdl.content
-                            if aeskey_raw:
-                                key = None
-                                try:
-                                    key = bytes.fromhex(aeskey_raw)
-                                except Exception:
-                                    try:
-                                        key = base64.b64decode(aeskey_raw)
-                                    except Exception:
-                                        pass
-                                if key:
-                                    for mode_desc, cipher in [
-                                        ("ECB", Cipher(algorithms.AES(key), modes.ECB())),
-                                        ("CBC", Cipher(algorithms.AES(key), modes.CBC(bytes(16)))),
-                                    ]:
-                                        try:
-                                            d = cipher.decryptor().update(data) + cipher.decryptor().finalize()
-                                            if is_img and d[:2] == b'\xff\xd8':
-                                                pad = d[-1]
-                                                if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
-                                                    data = d[:-pad]
-                                                else:
-                                                    data = d
-                                                break
-                                            pad = d[-1]
-                                            if 0 < pad <= 16 and all(b == pad for b in d[-pad:]):
-                                                data = d[:-pad]; break
-                                        except Exception:
-                                            continue
+                            data = _decrypt_media(data, aeskey_raw)
+                            # JPEG 引用截断到 EOI
+                            if is_img:
+                                eoi = data.rfind(b'\xff\xd9')
+                                if eoi > 0 and data[:2] == b'\xff\xd8':
+                                    data = data[:eoi + 1]
                             ref_path = IMAGES_DIR / f"ref_{int(time.time())}{suffix}"
                             ref_path.parent.mkdir(exist_ok=True)
                             ref_path.write_bytes(data)
@@ -629,7 +661,9 @@ async def handle(client, tok, raw):
                 except Exception:
                     logger.debug("引用文件下载失败", exc_info=True)
 
-        logger.info(f"收到文本消息 from={fu[:20]} has_ref={bool(item.get('ref_msg'))} text={text[:120]}")
+        audit("rx_msg", type="text", chars=len(text), lines=text.count("\n") + 1,
+             encoding="utf-8", has_ref=bool(item.get("ref_msg")))
+        logger.info(f"收到文本消息 from={fu[:20]} chars={len(text)} lines={text.count(chr(10))+1} has_ref={bool(item.get('ref_msg'))}")
         last_user = {"to_user": fu, "ctx_token": ct}
         LAST_USER_FILE.write_text(json.dumps(last_user), encoding="utf-8")
 
@@ -723,18 +757,19 @@ async def handle(client, tok, raw):
 
         # 审核模式：只有以 /yes 或 /no 开头的消息才当审核处理
         if pending_approval and text.strip().lower().startswith(("/yes", "/no", "/y", "/n")):
-            pending_approval = False
+            pending_approval = False; last_notified = ""
             answer = "yes" if text.strip().lower().startswith(("/yes", "/y")) else "no"
             logger.info(f"审核回复已注入 answer={answer}")
             inject_to_terminal(answer)
             continue
         elif pending_approval:
             # 不是审核回复，清掉标记正常处理
-            pending_approval = False
+            pending_approval = False; last_notified = ""
 
         # 远程命令：所有 / 开头直接穿透给终端
         if _is_remote_cmd(text):
             cmd = text.strip().lower()
+            audit("cmd", cmd=cmd)
             # ── CCtoWechat 本地命令（不注入终端）──
             if cmd.startswith("/stop"):
                 logger.info("执行 /stop")
@@ -745,7 +780,7 @@ async def handle(client, tok, raw):
                 awaiting_session_select = False
                 awaiting_model_select = False
                 awaiting_permissions_select = False
-                pending_approval = False
+                pending_approval = False; last_notified = ""
                 awaiting_image_action = False
                 await sendmsg(client, tok, fu, "已发送中断信号", ct)
                 continue
@@ -783,34 +818,13 @@ async def handle(client, tok, raw):
                 await sendmsg(client, tok, fu, out, ct)
                 continue
             if cmd.startswith("/status"):
-                logger.info("执行 /status")
-                try:
-                    s = get_session_stats()
-                    out = format_stats(s)
-                    await sendmsg(client, tok, fu, out, ct)
-                except Exception as e:
-                    logger.exception("/status 失败")
-                    await sendmsg(client, tok, fu, f"/status 失败: {e}", ct)
+                await _send_stats(client, tok, fu, ct, format_stats, "/status")
                 continue
             if cmd.startswith("/usage"):
-                logger.info("执行 /usage")
-                try:
-                    s = get_session_stats()
-                    out = format_usage(s)
-                    await sendmsg(client, tok, fu, out, ct)
-                except Exception as e:
-                    logger.exception("/usage 失败")
-                    await sendmsg(client, tok, fu, f"/usage 失败: {e}", ct)
+                await _send_stats(client, tok, fu, ct, format_usage, "/usage")
                 continue
             if cmd.startswith("/cost"):
-                logger.info("执行 /cost")
-                try:
-                    s = get_session_stats()
-                    out = format_cost(s)
-                    await sendmsg(client, tok, fu, out, ct)
-                except Exception as e:
-                    logger.exception("/cost 失败")
-                    await sendmsg(client, tok, fu, f"/cost 失败: {e}", ct)
+                await _send_stats(client, tok, fu, ct, format_cost, "/cost")
                 continue
             if cmd.startswith("/permissions"):
                 logger.info("执行 /permissions")
@@ -876,46 +890,13 @@ async def handle(client, tok, raw):
                     await sendmsg(client, tok, fu, f"/permissions 失败: {e}", ct)
                 continue
             if cmd.startswith("/agents"):
-                logger.info("执行 /agents")
-                try:
-                    claude = shutil.which("claude") or "claude"
-                    proc = subprocess.run([claude, "agents"], capture_output=True,
-                                          text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
-                    out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
-                    await sendmsg(client, tok, fu, out, ct)
-                except FileNotFoundError:
-                    await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
-                except Exception as e:
-                    logger.exception("/agents 失败")
-                    await sendmsg(client, tok, fu, f"/agents 失败: {e}", ct)
+                await _claude_subcmd(client, tok, fu, ct, ["agents"], "/agents")
                 continue
             if cmd.startswith("/plugins"):
-                logger.info("执行 /plugins")
-                try:
-                    claude = shutil.which("claude") or "claude"
-                    proc = subprocess.run([claude, "plugin", "list"], capture_output=True,
-                                          text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
-                    out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
-                    await sendmsg(client, tok, fu, out, ct)
-                except FileNotFoundError:
-                    await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
-                except Exception as e:
-                    logger.exception("/plugins 失败")
-                    await sendmsg(client, tok, fu, f"/plugins 失败: {e}", ct)
+                await _claude_subcmd(client, tok, fu, ct, ["plugin", "list"], "/plugins")
                 continue
             if cmd.startswith("/mcp"):
-                logger.info("执行 /mcp")
-                try:
-                    claude = shutil.which("claude") or "claude"
-                    proc = subprocess.run([claude, "mcp", "list"], capture_output=True,
-                                          text=True, timeout=CONFIG["timeouts"]["subprocess"], encoding="utf-8")
-                    out = proc.stdout.strip() or proc.stderr.strip() or "(无输出)"
-                    await sendmsg(client, tok, fu, out, ct)
-                except FileNotFoundError:
-                    await sendmsg(client, tok, fu, "未找到 claude 命令", ct)
-                except Exception as e:
-                    logger.exception("/mcp 失败")
-                    await sendmsg(client, tok, fu, f"/mcp 失败: {e}", ct)
+                await _claude_subcmd(client, tok, fu, ct, ["mcp", "list"], "/mcp")
                 continue
             if cmd.startswith("/help"):
                 logger.info("执行 /help")
@@ -940,10 +921,13 @@ async def handle(client, tok, raw):
 
 == 控制 ==
 /stop — 中断 Claude 当前操作
-/now  — 查看 Claude 当前思考进度
 /submit — 提交交互式选项答案
 /summaries — 开关 AI 会话摘要
+/sitpulltime [ms] — 流式推送间隔
 /imageloc [路径] — 图片保存路径
+
+== 诊断 ==
+/log — 发送审计日志（过去24h，仅元数据不含内容）
 
 == 其他 ==
 /help — 此帮助""".strip()
@@ -955,13 +939,27 @@ async def handle(client, tok, raw):
                 logger.info(f"执行 /summaries 切换至 {'开启' if on else '关闭'}")
                 await sendmsg(client, tok, fu, f"AI 摘要已{'开启' if on else '关闭'}", ct)
                 continue
-            if cmd.startswith("/now"):
-                logger.info("执行 /now")
-                if is_now_active():
-                    snapshot = get_now_snapshot()
-                    await sendmsg(client, tok, fu, f"Claude 当前状态：\n\n{snapshot}", ct)
+            if cmd.startswith("/sitpulltime"):
+                logger.info("执行 /sitpulltime")
+                parts = text.strip().split(maxsplit=1)
+                if len(parts) > 1:
+                    try:
+                        val = int(parts[1])
+                        if 1000 <= val <= 60000:
+                            _save_state(sitpulltime=val)
+                            await sendmsg(client, tok, fu, f"流式推送间隔已设为 {val}ms", ct)
+                        else:
+                            await sendmsg(client, tok, fu, "间隔范围 1000-60000ms", ct)
+                    except ValueError:
+                        await sendmsg(client, tok, fu, "格式: /sitpulltime <毫秒数>  (1000-60000)", ct)
                 else:
-                    await sendmsg(client, tok, fu, "当前没有进行中的请求", ct)
+                    cur = _load_state().get("sitpulltime", 2000)
+                    await sendmsg(client, tok, fu, f"当前流式推送间隔: {cur}ms\n\n修改: /sitpulltime <毫秒数>  (1000-60000)", ct)
+                continue
+            if cmd.startswith("/log"):
+                logger.info("执行 /log")
+                log_text = get_log_text()
+                await sendmsg(client, tok, fu, log_text[:1500], ct)
                 continue
             if cmd.startswith("/submit"):
                 logger.info("执行 /submit")
@@ -992,6 +990,7 @@ async def handle(client, tok, raw):
                     continue
                 else:
                     await sendmsg(client, tok, fu, "正在重启桥...", ct)
+                    audit("lifecycle", action="restart")
                     logger.info("用户触发 /restart，正在重启")
                     await asyncio.sleep(0.5)
                     os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -1060,16 +1059,30 @@ async def handle(client, tok, raw):
             _pending_questions = []
             _answers_injected = False
             time.sleep(0.5)
-            logger.info(f"选择器取消，文本注入: {text[:60]}")
+            logger.info(f"选择器取消，文本注入 chars={len(text)}")
             await _inject_and_wait(client, tok, fu, ct, text)
             continue
 
         await _inject_and_wait(client, tok, fu, ct, text)
 
 # ── main ──
+async def _relogin():
+    """重新登录，返回新 token，失败返回 None"""
+    global tok_g
+    CRED_FILE.unlink(missing_ok=True)
+    creds = await login()
+    if creds is None:
+        logger.error("重新登录失败，退出")
+        return None
+    tok_g = creds["token"]
+    logger.info("重新登录成功")
+    return creds["token"]
+
+
 async def main():
     global last_user, tok_g, cli_g
     setup_logging()
+    audit("lifecycle", action="start")
     logger.info("CCtoWechat 启动")
     parser = argparse.ArgumentParser()
     parser.add_argument("--session")
@@ -1139,14 +1152,10 @@ async def main():
                 if errc != 0:
                     ec += 1
                     if errc == -14:
-                        # 真正的 session 过期 → 必须重新登录
-                        CRED_FILE.unlink(missing_ok=True)
                         logger.warning("Session 已过期，重新登录")
-                        creds = await login()
-                        if creds is None: logger.error("重新登录失败，退出"); return
-                        tok = creds["token"]; tok_g = tok
+                        tok = await _relogin()
+                        if tok is None: return
                         ec = 0; net_ec = 0
-                        logger.info("重新登录成功")
                         continue
                     # 其他 API 错误 → 退避重试，不重新登录
                     w = short if ec <= thresh else long
@@ -1164,12 +1173,11 @@ async def main():
                 logger.exception(f"主循环异常 (连续{ec}次, 网络{net_ec}次)")
                 # 网络异常超过 30 次（约 15 分钟）→ 可能是 DNS/网络变更，尝试重新登录
                 if net_ec >= 30:
-                    CRED_FILE.unlink(missing_ok=True)
                     logger.warning("长时间网络异常，尝试重新登录")
-                    creds = await login()
-                    if creds is None: logger.error("重新登录失败，退出"); return
-                    tok = creds["token"]; tok_g = tok
-                    ec = 0; net_ec = 0; logger.info("重新登录成功")
+                    tok = await _relogin()
+                    if tok is None: return
+                    ec = 0; net_ec = 0
+                    continue
                 await asyncio.sleep(w)
     srv.close()
 

@@ -1,0 +1,307 @@
+{"ts": 1780933823, "event": "rx_msg", "meta": {"type": "text", "chars": 2, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780933854, "event": "rx_msg", "meta": {"type": "text", "chars": 3, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780933856, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780933856, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780933858, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780933858, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780933859, "event": "tx_msg", "meta": {"chars": 21, "lines": 1, "ok": true}}
+{"ts": 1780933859, "event": "tx_msg", "meta": {"chars": 21, "lines": 1, "ok": true}}
+{"ts": 1780933886, "event": "rx_msg", "meta": {"type": "text", "chars": 6, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780933887, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780933890, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780933890, "event": "tx_msg", "meta": {"chars": 11, "lines": 1, "ok": true}}
+{"ts": 1780933959, "event": "rx_msg", "meta": {"type": "text", "chars": 11, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780933960, "event": "rx_msg", "meta": {"type": "text", "chars": 8, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780933960, "event": "cmd", "meta": {"cmd": "/restart"}}
+{"ts": 1780933960, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780933960, "event": "lifecycle", "meta": {"action": "restart"}}
+{"ts": 1780933960, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780933961, "event": "lifecycle", "meta": {"action": "start"}}
+{"ts": 1780933961, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780933987, "event": "rx_msg", "meta": {"type": "text", "chars": 7, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780933989, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780933991, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780933992, "event": "tx_msg", "meta": {"chars": 51, "lines": 3, "ok": true}}
+{"ts": 1780934158, "event": "rx_msg", "meta": {"type": "text", "chars": 31, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934160, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934165, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934165, "event": "tx_msg", "meta": {"chars": 92, "lines": 3, "ok": true}}
+{"ts": 1780934197, "event": "rx_msg", "meta": {"type": "text", "chars": 25, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934198, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934202, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934202, "event": "tx_msg", "meta": {"chars": 71, "lines": 3, "ok": true}}
+{"ts": 1780934218, "event": "rx_msg", "meta": {"type": "text", "chars": 6, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934220, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934223, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934223, "event": "tx_msg", "meta": {"chars": 34, "lines": 1, "ok": true}}
+{"ts": 1780934370, "event": "rx_msg", "meta": {"type": "text", "chars": 3, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934372, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934374, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934374, "event": "tx_msg", "meta": {"chars": 26, "lines": 1, "ok": true}}
+{"ts": 1780934392, "event": "rx_msg", "meta": {"type": "text", "chars": 14, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934394, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934397, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934397, "event": "tx_msg", "meta": {"chars": 72, "lines": 3, "ok": true}}
+{"ts": 1780934432, "event": "rx_msg", "meta": {"type": "text", "chars": 21, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934433, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934437, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934437, "event": "tx_msg", "meta": {"chars": 88, "lines": 3, "ok": true}}
+{"ts": 1780934534, "event": "rx_msg", "meta": {"type": "text", "chars": 26, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934536, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934540, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934540, "event": "tx_msg", "meta": {"chars": 58, "lines": 3, "ok": true}}
+{"ts": 1780934569, "event": "rx_msg", "meta": {"type": "text", "chars": 24, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934570, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934576, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934576, "event": "tx_msg", "meta": {"chars": 64, "lines": 3, "ok": true}}
+{"ts": 1780934655, "event": "rx_msg", "meta": {"type": "text", "chars": 16, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934656, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934659, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934659, "event": "tx_msg", "meta": {"chars": 52, "lines": 3, "ok": true}}
+{"ts": 1780934674, "event": "rx_msg", "meta": {"type": "text", "chars": 11, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934675, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934678, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934678, "event": "tx_msg", "meta": {"chars": 63, "lines": 3, "ok": true}}
+{"ts": 1780934725, "event": "rx_msg", "meta": {"type": "text", "chars": 4, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934725, "event": "cmd", "meta": {"cmd": "/new"}}
+{"ts": 1780934740, "event": "rx_msg", "meta": {"type": "text", "chars": 3, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934741, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934744, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934744, "event": "tx_msg", "meta": {"chars": 14, "lines": 1, "ok": true}}
+{"ts": 1780934749, "event": "rx_msg", "meta": {"type": "text", "chars": 7, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934749, "event": "cmd", "meta": {"cmd": "/resume"}}
+{"ts": 1780934750, "event": "tx_msg", "meta": {"chars": 565, "lines": 13, "ok": true}}
+{"ts": 1780934767, "event": "rx_msg", "meta": {"type": "text", "chars": 1, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934767, "event": "tx_msg", "meta": {"chars": 3, "lines": 1, "ok": true}}
+{"ts": 1780934790, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934791, "event": "rx_msg", "meta": {"type": "text", "chars": 19, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934792, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934797, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934797, "event": "tx_msg", "meta": {"chars": 83, "lines": 3, "ok": true}}
+{"ts": 1780934848, "event": "rx_msg", "meta": {"type": "text", "chars": 60, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934850, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934854, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934854, "event": "tx_msg", "meta": {"chars": 93, "lines": 5, "ok": true}}
+{"ts": 1780934891, "event": "rx_msg", "meta": {"type": "text", "chars": 26, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780934892, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780934901, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780934901, "event": "tx_msg", "meta": {"chars": 211, "lines": 7, "ok": true}}
+{"ts": 1780935123, "event": "rx_msg", "meta": {"type": "text", "chars": 25, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780935124, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780935134, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780935134, "event": "tx_msg", "meta": {"chars": 187, "lines": 7, "ok": true}}
+{"ts": 1780935152, "event": "rx_msg", "meta": {"type": "text", "chars": 4, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780935154, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780935157, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780935157, "event": "tx_msg", "meta": {"chars": 80, "lines": 5, "ok": true}}
+{"ts": 1780935314, "event": "rx_msg", "meta": {"type": "text", "chars": 7, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780935314, "event": "cmd", "meta": {"cmd": "/resume"}}
+{"ts": 1780935315, "event": "tx_msg", "meta": {"chars": 566, "lines": 13, "ok": true}}
+{"ts": 1780935322, "event": "rx_msg", "meta": {"type": "text", "chars": 1, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780935326, "event": "tx_msg", "meta": {"chars": 80, "lines": 6, "ok": true}}
+{"ts": 1780935341, "event": "rx_msg", "meta": {"type": "text", "chars": 13, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780935343, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780935346, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780935346, "event": "tx_msg", "meta": {"chars": 3, "lines": 1, "ok": true}}
+{"ts": 1780963011, "event": "rx_msg", "meta": {"type": "text", "chars": 6, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780963013, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963019, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780963020, "event": "tx_msg", "meta": {"chars": 225, "lines": 15, "ok": true}}
+{"ts": 1780963038, "event": "rx_msg", "meta": {"type": "text", "chars": 4, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780963039, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963041, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780963042, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780963044, "event": "tx_msg", "meta": {"chars": 75, "lines": 2, "ok": true}}
+{"ts": 1780963049, "event": "tx_msg", "meta": {"chars": 312, "lines": 15, "ok": true}}
+{"ts": 1780963059, "event": "rx_msg", "meta": {"type": "text", "chars": 8, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780963059, "event": "cmd", "meta": {"cmd": "/restart"}}
+{"ts": 1780963059, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780963059, "event": "lifecycle", "meta": {"action": "restart"}}
+{"ts": 1780963060, "event": "lifecycle", "meta": {"action": "start"}}
+{"ts": 1780963060, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780963068, "event": "rx_msg", "meta": {"type": "text", "chars": 1, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780963069, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963073, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780963081, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780963084, "event": "tx_msg", "meta": {"chars": 224, "lines": 5, "ok": true}}
+{"ts": 1780963092, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780963098, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963100, "event": "tx_msg", "meta": {"chars": 29, "lines": 1, "ok": true}}
+{"ts": 1780963105, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963109, "event": "tx_msg", "meta": {"chars": 36, "lines": 2, "ok": true}}
+{"ts": 1780963115, "event": "tx_msg", "meta": {"chars": 34, "lines": 2, "ok": true}}
+{"ts": 1780963118, "event": "tx_msg", "meta": {"chars": 27, "lines": 2, "ok": true}}
+{"ts": 1780963120, "event": "tx_msg", "meta": {"chars": 34, "lines": 1, "ok": true}}
+{"ts": 1780963122, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963126, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963130, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963135, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963137, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780963139, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780963143, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780963149, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780963156, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780963160, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780963176, "event": "tx_msg", "meta": {"chars": 47, "lines": 2, "ok": true}}
+{"ts": 1780963181, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780963183, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1780963187, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780963195, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780963197, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780963199, "event": "tx_msg", "meta": {"chars": 356, "lines": 19, "ok": true}}
+{"ts": 1780984372, "event": "rx_msg", "meta": {"type": "text", "chars": 5, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780984374, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780984377, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780984381, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780984382, "event": "tx_msg", "meta": {"chars": 144, "lines": 8, "ok": true}}
+{"ts": 1780984416, "event": "rx_msg", "meta": {"type": "text", "chars": 21, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780984417, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780984429, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780984473, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780984476, "event": "tx_msg", "meta": {"chars": 135, "lines": 5, "ok": true}}
+{"ts": 1780984496, "event": "tx_msg", "meta": {"chars": 44, "lines": 2, "ok": true}}
+{"ts": 1780984500, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1780984505, "event": "tx_msg", "meta": {"chars": 219, "lines": 11, "ok": true}}
+{"ts": 1780985975, "event": "rx_msg", "meta": {"type": "text", "chars": 8, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780985975, "event": "cmd", "meta": {"cmd": "/restart"}}
+{"ts": 1780985975, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780985975, "event": "lifecycle", "meta": {"action": "restart"}}
+{"ts": 1780985976, "event": "lifecycle", "meta": {"action": "start"}}
+{"ts": 1780985977, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780985999, "event": "rx_msg", "meta": {"type": "text", "chars": 14, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780986001, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986004, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780986004, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986007, "event": "tx_msg", "meta": {"chars": 20, "lines": 1, "ok": true}}
+{"ts": 1780986011, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986014, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780986015, "event": "tx_msg", "meta": {"chars": 37, "lines": 1, "ok": true}}
+{"ts": 1780986046, "event": "rx_msg", "meta": {"type": "text", "chars": 8, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780986048, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986051, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780986051, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986054, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986057, "event": "tx_msg", "meta": {"chars": 19, "lines": 1, "ok": true}}
+{"ts": 1780986060, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986064, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986074, "event": "tx_msg", "meta": {"chars": 20, "lines": 1, "ok": true}}
+{"ts": 1780986077, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986079, "event": "tx_msg", "meta": {"chars": 11, "lines": 1, "ok": true}}
+{"ts": 1780986082, "event": "tx_msg", "meta": {"chars": 20, "lines": 1, "ok": true}}
+{"ts": 1780986082, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780986085, "event": "tx_msg", "meta": {"chars": 7, "lines": 1, "ok": true}}
+{"ts": 1780986085, "event": "tx_msg", "meta": {"chars": 14, "lines": 1, "ok": true}}
+{"ts": 1780986088, "event": "tx_msg", "meta": {"chars": 26, "lines": 1, "ok": true}}
+{"ts": 1780986091, "event": "tx_msg", "meta": {"chars": 20, "lines": 1, "ok": true}}
+{"ts": 1780986093, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986096, "event": "tx_msg", "meta": {"chars": 18, "lines": 1, "ok": true}}
+{"ts": 1780986099, "event": "tx_msg", "meta": {"chars": 17, "lines": 1, "ok": true}}
+{"ts": 1780986102, "event": "tx_msg", "meta": {"chars": 17, "lines": 1, "ok": true}}
+{"ts": 1780986105, "event": "tx_msg", "meta": {"chars": 14, "lines": 1, "ok": true}}
+{"ts": 1780986108, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986110, "event": "tx_msg", "meta": {"chars": 21, "lines": 1, "ok": true}}
+{"ts": 1780986116, "event": "tx_msg", "meta": {"chars": 23, "lines": 1, "ok": true}}
+{"ts": 1780986119, "event": "tx_msg", "meta": {"chars": 21, "lines": 1, "ok": true}}
+{"ts": 1780986123, "event": "tx_msg", "meta": {"chars": 14, "lines": 1, "ok": true}}
+{"ts": 1780986127, "event": "tx_msg", "meta": {"chars": 11, "lines": 1, "ok": true}}
+{"ts": 1780986130, "event": "tx_msg", "meta": {"chars": 14, "lines": 1, "ok": true}}
+{"ts": 1780986133, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986136, "event": "tx_msg", "meta": {"chars": 14, "lines": 1, "ok": true}}
+{"ts": 1780986138, "event": "tx_msg", "meta": {"chars": 11, "lines": 1, "ok": true}}
+{"ts": 1780986141, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780986143, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780986146, "event": "tx_msg", "meta": {"chars": 17, "lines": 1, "ok": true}}
+{"ts": 1780986148, "event": "tx_msg", "meta": {"chars": 37, "lines": 3, "ok": true}}
+{"ts": 1780986192, "event": "rx_msg", "meta": {"type": "text", "chars": 29, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780986193, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780986222, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780986223, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986223, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780986225, "event": "tx_msg", "meta": {"chars": 95, "lines": 3, "ok": true}}
+{"ts": 1780986236, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780986239, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1780986244, "event": "tx_msg", "meta": {"chars": 231, "lines": 10, "ok": true}}
+{"ts": 1780997690, "event": "rx_msg", "meta": {"type": "text", "chars": 8, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997690, "event": "cmd", "meta": {"cmd": "/restart"}}
+{"ts": 1780997690, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780997690, "event": "lifecycle", "meta": {"action": "restart"}}
+{"ts": 1780997691, "event": "lifecycle", "meta": {"action": "start"}}
+{"ts": 1780997692, "event": "tx_msg", "meta": {"chars": 6, "lines": 1, "ok": true}}
+{"ts": 1780997709, "event": "rx_msg", "meta": {"type": "text", "chars": 13, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997711, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997721, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780997722, "event": "tx_msg", "meta": {"chars": 178, "lines": 7, "ok": true}}
+{"ts": 1780997751, "event": "rx_msg", "meta": {"type": "text", "chars": 33, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997752, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997765, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780997765, "event": "tx_msg", "meta": {"chars": 210, "lines": 12, "ok": true}}
+{"ts": 1780997875, "event": "rx_msg", "meta": {"type": "text", "chars": 38, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997876, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997887, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780997887, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997898, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997898, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780997900, "event": "tx_msg", "meta": {"chars": 155, "lines": 9, "ok": true}}
+{"ts": 1780997902, "event": "tx_msg", "meta": {"chars": 64, "lines": 1, "ok": true}}
+{"ts": 1780997904, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997908, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997913, "event": "rx_msg", "meta": {"type": "text", "chars": 4, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997916, "event": "rx_msg", "meta": {"type": "text", "chars": 7, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997918, "event": "rx_msg", "meta": {"type": "text", "chars": 1, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997919, "event": "rx_msg", "meta": {"type": "text", "chars": 3, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997920, "event": "tx_msg", "meta": {"chars": 15, "lines": 1, "ok": true}}
+{"ts": 1780997921, "event": "tx_msg", "meta": {"chars": 53, "lines": 1, "ok": true}}
+{"ts": 1780997927, "event": "rx_msg", "meta": {"type": "text", "chars": 6, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780997931, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997931, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997936, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780997940, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1780997949, "event": "tx_msg", "meta": {"chars": 322, "lines": 22, "ok": true}}
+{"ts": 1780998013, "event": "rx_msg", "meta": {"type": "text", "chars": 43, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780998015, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780998026, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780998026, "event": "tx_msg", "meta": {"chars": 164, "lines": 7, "ok": true}}
+{"ts": 1780999060, "event": "rx_msg", "meta": {"type": "text", "chars": 6, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780999062, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780999067, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780999067, "event": "tx_msg", "meta": {"chars": 87, "lines": 3, "ok": true}}
+{"ts": 1780999091, "event": "rx_msg", "meta": {"type": "text", "chars": 5, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1780999093, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1780999097, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1780999097, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1780999102, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1780999102, "event": "tx_msg", "meta": {"chars": 62, "lines": 1, "ok": true}}
+{"ts": 1781010965, "event": "rx_msg", "meta": {"type": "text", "chars": 22, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781010967, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1781010970, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1781010970, "event": "tx_msg", "meta": {"chars": 40, "lines": 1, "ok": true}}
+{"ts": 1781011002, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1781011002, "event": "tx_msg", "meta": {"chars": 211, "lines": 5, "ok": true}}
+{"ts": 1781011083, "event": "rx_msg", "meta": {"type": "text", "chars": 18, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781011084, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1781011089, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1781011089, "event": "tx_msg", "meta": {"chars": 132, "lines": 3, "ok": true}}
+{"ts": 1781011135, "event": "rx_msg", "meta": {"type": "text", "chars": 8, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781011137, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1781011140, "event": "rx_msg", "meta": {"type": "text", "chars": 6, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781011143, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1781011143, "event": "tx_msg", "meta": {"chars": 163, "lines": 5, "ok": true}}
+{"ts": 1781011143, "event": "tx_msg", "meta": {"chars": 163, "lines": 5, "ok": true}}
+{"ts": 1781011160, "event": "rx_msg", "meta": {"type": "text", "chars": 9, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781011161, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1781011168, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1781011168, "event": "tx_msg", "meta": {"chars": 183, "lines": 5, "ok": true}}
+{"ts": 1781011181, "event": "rx_msg", "meta": {"type": "text", "chars": 21, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781011183, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1781011187, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1781011187, "event": "tx_msg", "meta": {"chars": 83, "lines": 1, "ok": true}}
+{"ts": 1781011191, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1781011198, "event": "tx_msg", "meta": {"chars": 8, "lines": 1, "ok": true}}
+{"ts": 1781011198, "event": "tx_msg", "meta": {"chars": 115, "lines": 4, "ok": true}}
+{"ts": 1781011244, "event": "rx_msg", "meta": {"type": "text", "chars": 12, "lines": 1, "encoding": "utf-8", "has_ref": false}}
+{"ts": 1781011245, "event": "tx_msg", "meta": {"chars": 13, "lines": 1, "ok": true}}
+{"ts": 1781011249, "event": "tx_msg", "meta": {"chars": 16, "lines": 1, "ok": true}}
+{"ts": 1781011249, "event": "tx_msg", "meta": {"chars": 64, "lines": 1, "ok": true}}
+{"ts": 1781011253, "event": "tx_msg", "meta": {"chars": 64, "lines": 1, "ok": true}}
+{"ts": 1781011259, "event": "tx_msg", "meta": {"chars": 84, "lines": 1, "ok": true}}
+{"ts": 1781011263, "event": "tx_msg", "meta": {"chars": 83, "lines": 1, "ok": true}}
