@@ -141,9 +141,10 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 | `/restart` | 远程重启桥接（需 debug 模式） |
 | `/imageloc [路径]` | 查看 / 设置图片和文件保存路径 |
 | `/now` | 截屏发送（Claude 无感知） |
+| `/cam` | 摄像头拍照发送 |
 | `/log` | 发送审计日志（过去24h，仅元数据不含内容） |
 
-全部命令可混用，不注入终端的本地命令（`/summaries` `/sitpulltime` `/imageloc` `/debug` `/debugoff` `/restart` `/log` `/now`）桥接本地处理。
+全部命令可混用，不注入终端的本地命令（`/summaries` `/sitpulltime` `/imageloc` `/debug` `/debugoff` `/restart` `/log` `/now` `/cam`）桥接本地处理。
 
 ## 图片与文件
 

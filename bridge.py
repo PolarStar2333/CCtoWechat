@@ -15,7 +15,7 @@ CCtoWechat — Claude Code 接入个人微信
 平台: Windows ✅ | macOS 🧪 | Linux 🧪（🧪 = 社区支持，作者无设备测试）
 """
 
-import argparse, asyncio, httpx, json, base64, hashlib, random, time, re, logging, sys, os, subprocess, shutil, secrets
+import argparse, asyncio, httpx, json, base64, hashlib, random, time, re, logging, sys, os, subprocess, shutil, secrets, cv2
 from pathlib import Path
 
 from logger_setup import setup_logging
@@ -432,6 +432,17 @@ def _screenshot():
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _capture_camera():
+    """拍摄一张摄像头照片，返回 JPEG bytes"""
+    cap = cv2.VideoCapture(0)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        return None
+    _, buf = cv2.imencode('.jpg', frame)
+    return buf.tobytes()
 
 
 async def _wait_and_reply(client, tok, fu, ct, text, **kw):
@@ -938,6 +949,7 @@ async def handle(client, tok, raw):
 
 == 诊断 ==
 /now — 截屏发送（Claude 无感知）
+/cam — 摄像头拍照发送
 /log — 发送审计日志（过去24h，仅元数据不含内容）
 
 == 其他 ==
@@ -977,6 +989,15 @@ async def handle(client, tok, raw):
                 png = _screenshot()
                 ok = await send_image(client, tok, fu, ct, png)
                 await sendmsg(client, tok, fu, "截屏已发送" if ok else "截屏失败", ct)
+                continue
+            if cmd_word == "/cam":
+                logger.info("执行 /cam 拍照")
+                jpg = _capture_camera()
+                if jpg is None:
+                    await sendmsg(client, tok, fu, "摄像头无画面", ct)
+                else:
+                    ok = await send_image(client, tok, fu, ct, jpg)
+                    await sendmsg(client, tok, fu, "照片已发送" if ok else "照片发送失败", ct)
                 continue
             if cmd_word == "/submit":
                 logger.info("执行 /submit")
