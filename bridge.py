@@ -28,6 +28,8 @@ from sessions import (init as sessions_init, set_locked_jsonl,
                       get_session_stats, format_stats, format_usage, format_cost,
                       reset_stream_buffer)
 from selector import format_questions, validate_answer, inject_answers, format_confirmation
+from io import BytesIO
+from PIL import ImageGrab
 from auditlog import audit, get_log_text
 
 logger = logging.getLogger("bridge")
@@ -423,6 +425,13 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
         on_first_respond=on_respond,
         on_ask_user_question=on_question,
         on_stream_chunk=on_stream, stream_interval=sitpull, **kw)
+
+def _screenshot():
+    """全屏截图，返回 PNG bytes。Claude 不可见。"""
+    img = ImageGrab.grab(all_screens=True)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 async def _wait_and_reply(client, tok, fu, ct, text, **kw):
@@ -928,6 +937,7 @@ async def handle(client, tok, raw):
 /imageloc [路径] — 图片保存路径
 
 == 诊断 ==
+/now — 截屏发送（Claude 无感知）
 /log — 发送审计日志（过去24h，仅元数据不含内容）
 
 == 其他 ==
@@ -961,6 +971,12 @@ async def handle(client, tok, raw):
                 logger.info("执行 /log")
                 log_text = get_log_text()
                 await sendmsg(client, tok, fu, log_text[:1500], ct)
+                continue
+            if cmd_word == "/now":
+                logger.info("执行 /now 截屏")
+                png = _screenshot()
+                ok = await send_image(client, tok, fu, ct, png)
+                await sendmsg(client, tok, fu, "截屏已发送" if ok else "截屏失败", ct)
                 continue
             if cmd_word == "/submit":
                 logger.info("执行 /submit")
