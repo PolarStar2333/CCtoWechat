@@ -331,6 +331,12 @@ async def http_handler(reader, writer):
     try:
         data = await asyncio.wait_for(reader.read(65536), timeout=10)
         body = data.decode("utf-8", errors="replace")
+        # Windows 命令行 curl 传中文路径可能是 GBK，尝试修复
+        if "�" in body:
+            try:
+                body = data.decode("gbk")
+            except Exception:
+                pass
         # GET /qr → 重定向到微信扫码 URL
         if body.startswith("GET /qr"):
             if QR_FILE.exists():
@@ -953,6 +959,7 @@ async def handle(client, tok, raw):
 /log — 发送审计日志（过去24h，仅元数据不含内容）
 
 == 其他 ==
+/send — 告诉 Claude 如何发文件/图片到微信
 /help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
@@ -998,6 +1005,27 @@ async def handle(client, tok, raw):
                 else:
                     ok = await send_image(client, tok, fu, ct, jpg)
                     await sendmsg(client, tok, fu, "照片已发送" if ok else "照片发送失败", ct)
+                continue
+            if cmd_word == "/send":
+                logger.info("执行 /send 注入发送说明")
+                msg = f"""用户让你把刚刚的成果直接发给他的微信。
+
+发送命令（任选一个方法）：
+
+方法一（推荐，避免中文路径问题）：
+1. 把JSON写入临时文件：echo '{{"file_path":"完整路径"}}' > %TEMP%\\_send.json
+2. 发送：curl -s -XPOST http://127.0.0.1:9876/send -d @%TEMP%\\_send.json
+
+方法二（直接发送，仅当路径无中文时可用）：
+- 发文本：curl -s -XPOST http://127.0.0.1:9876/send -d '{{"text":"内容"}}'
+- 发图片：curl -s -XPOST http://127.0.0.1:9876/send -d '{{"image_path":"完整绝对路径"}}'
+- 发文件：curl -s -XPOST http://127.0.0.1:9876/send -d '{{"file_path":"完整绝对路径"}}'
+
+JSON字段说明：text发文本 / image_path发图片 / file_path发文件。路径必须是绝对路径。
+如有多个文件逐一发送。发送完简要告诉用户发了什么。现在就发送。不要问用户任何问题。"""
+                inject_to_terminal(msg)
+                audit("cmd", cmd="send_inject")
+                await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
             if cmd_word == "/submit":
                 logger.info("执行 /submit")
