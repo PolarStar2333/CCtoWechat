@@ -1219,7 +1219,7 @@ async def main():
                     ec += 1
                     if errc == -14:
                         logger.warning("Session 已过期，重新登录")
-                        tok = await _relogin()
+                        tok = await _relogin(); tok_g = tok
                         if tok is None: return
                         ec = 0; net_ec = 0
                         continue
@@ -1240,7 +1240,7 @@ async def main():
                 # 网络异常超过 30 次（约 15 分钟）→ 可能是 DNS/网络变更，尝试重新登录
                 if net_ec >= 30:
                     logger.warning("长时间网络异常，尝试重新登录")
-                    tok = await _relogin()
+                    tok = await _relogin(); tok_g = tok
                     if tok is None: return
                     ec = 0; net_ec = 0
                     continue
