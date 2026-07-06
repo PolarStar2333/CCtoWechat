@@ -437,27 +437,30 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
     msg_cnt = [0]
     overflow = [False]
 
-    def _bump():
+    async def _bump():
         msg_cnt[0] += 1
+        if msg_cnt[0] == 9 and _hwpush_enabled:
+            try: await sendmsg(client, tok, fu, "后续内容请在负一屏查看", ct)
+            except Exception: pass
         if msg_cnt[0] >= 10 and _hwpush_enabled:
             overflow[0] = True
 
     async def on_user():
         try: await sendmsg(client, tok, fu, "思考中...", ct)
         except Exception: pass
-        _bump()
+        await _bump()
     async def on_tool():
         try: await sendmsg(client, tok, fu, "使用工具...", ct)
         except Exception: pass
-        _bump()
+        await _bump()
     async def on_respond():
         try: await sendmsg(client, tok, fu, "回复中...", ct)
         except Exception: pass
-        _bump()
+        await _bump()
     async def on_stream(delta):
         try: await sendmsg(client, tok, fu, delta, ct)
         except Exception: pass
-        _bump()
+        await _bump()
     async def on_question(questions):
         global awaiting_question_answer, _pending_questions
         _pending_questions = questions
