@@ -402,35 +402,89 @@ async def start_http():
     return srv
 
 # ── API 响应通知 ──
+async def _hwpush_send(content):
+    """推送 Markdown 内容到华为负一屏。仅在 _hwpush_enabled 时调用。"""
+    if not _hwpush_enabled or not _hwpush_auth_code:
+        return False
+    url = "https://hiboard-claw-drcn.ai.dbankcloud.cn/distribution/message/cloud/claw/msg/upload"
+    now = int(time.time())
+    sid = f"cctowechat_{now}"
+    body = {"data": {"authCode": _hwpush_auth_code, "msgContent": [{
+        "msgId": sid, "scheduleTaskId": "cctowechat_reply",
+        "scheduleTaskName": "Claude 回复", "summary": "长回复自动推送",
+        "result": "完成", "content": content, "source": "CCtoWechat",
+        "taskFinishTime": now
+    }]}}
+    try:
+        async with httpx.AsyncClient(timeout=30) as hw:
+            r = await hw.post(url, json=body, headers={
+                "Content-Type": "application/json", "x-trace-id": sid})
+            ok = r.status_code == 200
+            audit("hwpush", chars=len(content), ok=ok)
+            logger.info(f"hwpush {'OK' if ok else 'FAIL'} chars={len(content)}")
+            return ok
+    except Exception:
+        logger.exception("hwpush 失败")
+        return False
+
+
 async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
-    """等待 Claude 回复，三阶段信号通知微信 + 自动流式推送"""
-    reset_stream_buffer()  # 新一轮监听开始
+    """等待 Claude 回复，三阶段信号通知微信 + 自动流式推送。
+    若本轮 sendmsg 超过 10 条且 hwpush 开启，停止 iLink 推送，完整内容推送到华为负一屏。"""
+    reset_stream_buffer()
     _st = _load_state()
     sitpull = _st.get("sitpulltime", 2000)
+    msg_cnt = [0]
+    overflow = [False]
+    overflow_parts = []
+
+    def _try_send(delta=""):
+        msg_cnt[0] += 1
+        if msg_cnt[0] >= 10 and _hwpush_enabled:
+            overflow[0] = True
+        if overflow[0]:
+            if delta:
+                overflow_parts.append(delta)
+            return
+        return True
+
     async def on_user():
-        try: await sendmsg(client, tok, fu, "思考中...", ct)
-        except Exception: pass
+        if _try_send():
+            try: await sendmsg(client, tok, fu, "思考中...", ct)
+            except Exception: pass
     async def on_tool():
-        try: await sendmsg(client, tok, fu, "使用工具...", ct)
-        except Exception: pass
+        if _try_send():
+            try: await sendmsg(client, tok, fu, "使用工具...", ct)
+            except Exception: pass
     async def on_respond():
-        try: await sendmsg(client, tok, fu, "回复中...", ct)
-        except Exception: pass
+        if _try_send():
+            try: await sendmsg(client, tok, fu, "回复中...", ct)
+            except Exception: pass
     async def on_stream(delta):
-        try: await sendmsg(client, tok, fu, delta, ct)
-        except Exception: pass
+        if _try_send(delta):
+            try: await sendmsg(client, tok, fu, delta, ct)
+            except Exception: pass
     async def on_question(questions):
         global awaiting_question_answer, _pending_questions
         _pending_questions = questions
         msg = format_questions(questions)
-        try: await sendmsg(client, tok, fu, msg, ct)
-        except Exception: pass
+        if not overflow[0]:
+            try: await sendmsg(client, tok, fu, msg, ct)
+            except Exception: pass
         awaiting_question_answer = True
-    return await wait_reply(jsonl, text,
+
+    reply = await wait_reply(jsonl, text,
         on_user_found=on_user, on_tool_use=on_tool,
         on_first_respond=on_respond,
         on_ask_user_question=on_question,
         on_stream_chunk=on_stream, stream_interval=sitpull, **kw)
+
+    if overflow[0] and reply and _hwpush_enabled:
+        # 用完整 reply 替代流式片段，推送到华为负一屏
+        await _hwpush_send(reply if len(reply) > len("\n".join(overflow_parts)) else "\n".join(overflow_parts))
+        await sendmsg(client, tok, fu, f"[已推送到华为负一屏] {len(reply)}字符", ct)
+        return None  # 阻止 _wait_and_reply 重复发送
+    return reply
 
 def _screenshot():
     """全屏截图，返回 PNG bytes。Claude 不可见。"""
@@ -505,6 +559,8 @@ awaiting_question_answer = False  # Claude AskUserQuestion 等待用户回答
 _pending_questions = []            # 当前问题列表，供答案映射用
 _answers_injected = False          # 答案已注入，等待确认提交/取消
 _debug_mode = _load_state().get("debug_mode", False)  # debug 模式开关（持久化）
+_hwpush_enabled = _load_state().get("hwpush_enabled", False)
+_hwpush_auth_code = _load_state().get("hwpush_auth_code", "")
 _awaiting_debug_confirm = False    # 等待确认 /debug
 
 async def check_approval():
@@ -586,7 +642,7 @@ def _is_remote_cmd(text):
     t = text.strip()
     if not t.startswith("/"):
         return False
-    if t.startswith('/hwpush-on"'):
+    if t.startswith('/hwpush-on"') or t.startswith('/hwpush-off'):
         return True
     first = t.split()[0].lower()
     return re.match(r'^/[a-zA-Z][a-zA-Z0-9_-]*$', first) is not None
@@ -595,6 +651,7 @@ async def handle(client, tok, raw):
     global last_user, pending_approval, awaiting_question_answer, _pending_questions, _answers_injected, _debug_mode, _awaiting_debug_confirm
     global awaiting_session_select, awaiting_model_select, _model_map, IMAGES_DIR
     global awaiting_image_action, pending_image_path, pending_is_file
+    global _hwpush_enabled, _hwpush_auth_code
     global awaiting_permissions_select, _permissions_map
     if isinstance(raw, str):
         try: msg = json.loads(raw)
@@ -962,7 +1019,8 @@ async def handle(client, tok, raw):
 
 == 其他 ==
 /send — 告诉 Claude 如何发文件/图片到微信
-/hwpush-on"授权码" — 注入华为负一屏推送说明
+/hwpush-on"授权码" — 开启华为负一屏推送
+/hwpush-off — 关闭华为负一屏推送
 /help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
@@ -1036,6 +1094,9 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
                     await sendmsg(client, tok, fu, '格式: /hwpush-on"授权码"', ct)
                     continue
                 ac = m.group(1)
+                _hwpush_enabled = True
+                _hwpush_auth_code = ac
+                _save_state(hwpush_enabled=True, hwpush_auth_code=ac)
                 logger.info("执行 /hwpush-on 注入华为负一屏推送说明")
                 msg = f"""把我的成果推送到华为手机负一屏。授权码：{ac}
 
@@ -1047,6 +1108,12 @@ content 用完整 Markdown，taskFinishTime 用当前 UTC 时间戳。现在推�
                 inject_to_terminal(msg)
                 audit("cmd", cmd="hwpush_on_inject")
                 await _wait_and_reply(client, tok, fu, ct, msg)
+                continue
+            if cmd_word == "/hwpush-off":
+                logger.info("执行 /hwpush-off")
+                _hwpush_enabled = False
+                _save_state(hwpush_enabled=False)
+                await sendmsg(client, tok, fu, "hwpush 已关闭", ct)
                 continue
             if cmd_word == "/submit":
                 logger.info("执行 /submit")
