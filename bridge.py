@@ -430,47 +430,40 @@ async def _hwpush_send(content):
 
 async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
     """等待 Claude 回复，三阶段信号通知微信 + 自动流式推送。
-    若本轮 sendmsg 超过 10 条且 hwpush 开启，停止 iLink 推送，完整内容推送到华为负一屏。"""
+    若本轮 sendmsg 超过 10 条且 hwpush 开启，完整回复自动推送到华为负一屏。"""
     reset_stream_buffer()
     _st = _load_state()
     sitpull = _st.get("sitpulltime", 2000)
     msg_cnt = [0]
     overflow = [False]
-    overflow_parts = []
 
-    def _try_send(delta=""):
+    def _bump():
         msg_cnt[0] += 1
         if msg_cnt[0] >= 10 and _hwpush_enabled:
             overflow[0] = True
-        if overflow[0]:
-            if delta:
-                overflow_parts.append(delta)
-            return
-        return True
 
     async def on_user():
-        if _try_send():
-            try: await sendmsg(client, tok, fu, "思考中...", ct)
-            except Exception: pass
+        try: await sendmsg(client, tok, fu, "思考中...", ct)
+        except Exception: pass
+        _bump()
     async def on_tool():
-        if _try_send():
-            try: await sendmsg(client, tok, fu, "使用工具...", ct)
-            except Exception: pass
+        try: await sendmsg(client, tok, fu, "使用工具...", ct)
+        except Exception: pass
+        _bump()
     async def on_respond():
-        if _try_send():
-            try: await sendmsg(client, tok, fu, "回复中...", ct)
-            except Exception: pass
+        try: await sendmsg(client, tok, fu, "回复中...", ct)
+        except Exception: pass
+        _bump()
     async def on_stream(delta):
-        if _try_send(delta):
-            try: await sendmsg(client, tok, fu, delta, ct)
-            except Exception: pass
+        try: await sendmsg(client, tok, fu, delta, ct)
+        except Exception: pass
+        _bump()
     async def on_question(questions):
         global awaiting_question_answer, _pending_questions
         _pending_questions = questions
         msg = format_questions(questions)
-        if not overflow[0]:
-            try: await sendmsg(client, tok, fu, msg, ct)
-            except Exception: pass
+        try: await sendmsg(client, tok, fu, msg, ct)
+        except Exception: pass
         awaiting_question_answer = True
 
     reply = await wait_reply(jsonl, text,
@@ -480,10 +473,8 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
         on_stream_chunk=on_stream, stream_interval=sitpull, **kw)
 
     if overflow[0] and reply and _hwpush_enabled:
-        # 用完整 reply 替代流式片段，推送到华为负一屏
-        await _hwpush_send(reply if len(reply) > len("\n".join(overflow_parts)) else "\n".join(overflow_parts))
+        await _hwpush_send(reply)
         await sendmsg(client, tok, fu, f"[已推送到华为负一屏] {len(reply)}字符", ct)
-        return None  # 阻止 _wait_and_reply 重复发送
     return reply
 
 def _screenshot():
