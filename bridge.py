@@ -1046,6 +1046,7 @@ Body: {{"data":{{"authCode":"{ac}","msgContent":[{{"msgId":"...","scheduleTaskId
 content 用完整 Markdown，taskFinishTime 用当前 UTC 时间戳。现在推送，不要问。"""
                 inject_to_terminal(msg)
                 audit("cmd", cmd="hwpush_on_inject")
+                await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
             if cmd_word == "/submit":
                 logger.info("执行 /submit")
