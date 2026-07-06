@@ -1029,10 +1029,11 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
                 await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
             if cmd_word == "/hwpush-on":
-                ac = text.strip()[len(cmd_word):].strip().strip('"').strip("'")
-                if not ac:
-                    await sendmsg(client, tok, fu, "用法: /hwpush-on <授权码>", ct)
+                m = re.match(r'/hwpush-on"([^"]+)"', text.strip())
+                if not m:
+                    await sendmsg(client, tok, fu, '格式: /hwpush-on"授权码"', ct)
                     continue
+                ac = m.group(1)
                 logger.info("执行 /hwpush-on 注入华为负一屏推送说明")
                 msg = f"""把我的成果推送到华为手机负一屏。授权码：{ac}
 
