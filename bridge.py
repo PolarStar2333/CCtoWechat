@@ -960,7 +960,7 @@ async def handle(client, tok, raw):
 
 == 其他 ==
 /send — 告诉 Claude 如何发文件/图片到微信
-/hwpush — 告诉 Claude 如何推送到华为负一屏
+/hwpush-on — 注入华为负一屏推送说明（不等待回复）
 /help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
@@ -1028,8 +1028,8 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
                 audit("cmd", cmd="send_inject")
                 await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
-            if cmd_word == "/hwpush":
-                logger.info("执行 /hwpush 注入华为负一屏推送说明")
+            if cmd_word == "/hwpush-on":
+                logger.info("执行 /hwpush-on 注入华为负一屏推送说明")
                 ac = CONFIG.get("hwpush_auth_code", "")
                 if not ac:
                     await sendmsg(client, tok, fu, "未配置 hwpush_auth_code，请在 config.json 中设置", ct)
@@ -1052,8 +1052,7 @@ echo '{ex}' > %TEMP%\\_hwpush.json
 
 content 字段支持完整 Markdown，taskFinishTime 用 $(date +%s)。现在就推送，不要问任何问题。"""
                 inject_to_terminal(msg)
-                audit("cmd", cmd="hwpush_inject")
-                await _wait_and_reply(client, tok, fu, ct, msg)
+                audit("cmd", cmd="hwpush_on_inject")
                 continue
             if cmd_word == "/submit":
                 logger.info("执行 /submit")
