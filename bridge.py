@@ -1030,27 +1030,22 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
                 continue
             if cmd_word == "/hwpush-on":
                 logger.info("执行 /hwpush-on 注入华为负一屏推送说明")
-                ac = CONFIG.get("hwpush_auth_code", "")
-                if not ac:
-                    await sendmsg(client, tok, fu, "未配置 hwpush_auth_code，请在 config.json 中设置", ct)
-                    continue
-                ex = json.dumps({"data": {"authCode": ac, "msgContent": [{
-                    "msgId": "任务ID", "scheduleTaskId": "固定ID",
-                    "scheduleTaskName": "任务名", "summary": "摘要",
-                    "result": "完成",
-                    "content": "# 标题\\n\\nMarkdown内容\\n\\n- 要点1\\n- 要点2",
-                    "source": "Claude", "taskFinishTime": 0
-                }]}}, ensure_ascii=False)
-                msg = f"""用户让你把成果推送到他华为手机负一屏。
+                msg = """用户让你把成果推送到他华为手机负一屏。
 
-1. 设置授权码：openclaw config set skills.entries.today-task.config.authCode {ac}
+授权码读取方式：
+  openclaw config get skills.entries.today-task.config.authCode
 
-2. 写入JSON到临时文件（替换 content/taskFinishTime 等字段）：
-echo '{ex}' > %TEMP%\\_hwpush.json
+推送 API：
+  POST https://hiboard-claw-drcn.ai.dbankcloud.cn/distribution/message/cloud/claw/msg/upload
+  Content-Type: application/json
+  Body: {"data":{"authCode":"<授权码>","msgContent":[{"msgId":"唯一ID","scheduleTaskId":"任务ID","scheduleTaskName":"名称","summary":"摘要","result":"结果","content":"# Markdown内容\\n\\n支持换行","source":"Claude","taskFinishTime":<UTC秒时间戳>}]}}
 
-3. 推送：curl -s -XPOST https://hiboard-claw-drcn.ai.dbankcloud.cn/distribution/message/cloud/claw/msg/upload -H "Content-Type: application/json" -d @%TEMP%\\_hwpush.json
+要求：
+- 授权码用 openclaw config get 读取，不要写死在代码里
+- content 支持完整 Markdown 排版
+- taskFinishTime 用当前 UTC 时间戳
 
-content 字段支持完整 Markdown，taskFinishTime 用 $(date +%s)。现在就推送，不要问任何问题。"""
+现在就把你的成果推送到用户负一屏。不要问任何问题。"""
                 inject_to_terminal(msg)
                 audit("cmd", cmd="hwpush_on_inject")
                 continue
