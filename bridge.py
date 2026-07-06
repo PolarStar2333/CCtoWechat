@@ -960,6 +960,7 @@ async def handle(client, tok, raw):
 
 == 其他 ==
 /send — 告诉 Claude 如何发文件/图片到微信
+/hwpush — 告诉 Claude 如何推送到华为负一屏
 /help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
@@ -1025,6 +1026,24 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
 如有多个文件逐一发送。发送完简要告诉用户发了什么。现在就发送。不要问用户任何问题。"""
                 inject_to_terminal(msg)
                 audit("cmd", cmd="send_inject")
+                await _wait_and_reply(client, tok, fu, ct, msg)
+                continue
+            if cmd_word == "/hwpush":
+                logger.info("执行 /hwpush 注入华为负一屏推送说明")
+                msg = f"""用户让你把成果推送到他华为手机负一屏。
+
+1. 先设置授权码：
+openclaw config set skills.entries.today-task.config.authCode rplWbtAaL0E6
+
+2. 创建推送数据JSON文件（写入临时文件避免编码问题）：
+echo '{{"data":{{"authCode":"rplWbtAaL0E6","msgContent":[{{"msgId":"任务ID","scheduleTaskId":"固定ID","scheduleTaskName":"任务名","summary":"摘要","result":"完成","content":"# 标题\\\\n\\\\nMarkdown内容\\\\n\\\\n- 要点1\\\\n- 要点2","source":"Claude","taskFinishTime":'$(date +%s)'}}]}}}}' > %TEMP%\\_hwpush.json
+
+3. 推送：
+curl -s -XPOST https://hiboard-claw-drcn.ai.dbankcloud.cn/distribution/message/cloud/claw/msg/upload -H "Content-Type: application/json" -d @%TEMP%\\_hwpush.json
+
+content 字段支持完整 Markdown。现在就推送。不要问用户任何问题。"""
+                inject_to_terminal(msg)
+                audit("cmd", cmd="hwpush_inject")
                 await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
             if cmd_word == "/submit":
