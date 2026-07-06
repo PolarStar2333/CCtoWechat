@@ -436,6 +436,7 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
     sitpull = _st.get("sitpulltime", 2000)
     msg_cnt = [0]
     overflow = [False]
+    full_content = []  # 累积所有流式内容（含工具输出）
 
     async def _bump():
         msg_cnt[0] += 1
@@ -458,6 +459,7 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
     async def on_stream(delta):
         if msg_cnt[0] == 9 and _hwpush_enabled:
             delta += "\n\nClaude已经达到本次问话微信最大回复10条限制，若您认为有后续消息请去负一屏查看"
+        full_content.append(delta)
         try: await sendmsg(client, tok, fu, delta, ct)
         except Exception: pass
         await _bump()
@@ -475,10 +477,13 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
         on_ask_user_question=on_question,
         on_stream_chunk=on_stream, stream_interval=sitpull, **kw)
 
-    if overflow[0] and reply and _hwpush_enabled:
-        logger.info(f"hwpush 触发 overflow msg_cnt={msg_cnt[0]} reply_len={len(reply)}")
-        await _hwpush_send(reply)
-        await sendmsg(client, tok, fu, f"[已推送到华为负一屏] {len(reply)}字符", ct)
+    if overflow[0] and _hwpush_enabled:
+        combined = "\n".join(full_content) if full_content else reply or ""
+        if len(combined) < len(reply or ""):
+            combined = reply
+        logger.info(f"hwpush 触发 overflow msg_cnt={msg_cnt[0]} push_len={len(combined)}")
+        await _hwpush_send(combined)
+        await sendmsg(client, tok, fu, f"[已推送到华为负一屏] {len(combined)}字符", ct)
     elif overflow[0] and reply:
         logger.warning(f"hwpush overflow触发但未启用 enabled={_hwpush_enabled}")
     return reply
