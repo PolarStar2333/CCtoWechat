@@ -442,7 +442,6 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
         msg_cnt[0] += 1
         if msg_cnt[0] >= 10 and _hwpush_enabled:
             overflow[0] = True
-            logger.info(f"hwpush overflow set msg_cnt={msg_cnt[0]}")
 
     async def on_user():
         try: await sendmsg(client, tok, fu, "思考中...", ct)
@@ -481,11 +480,8 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
         combined = "\n".join(full_content) if full_content else reply or ""
         if len(combined) < len(reply or ""):
             combined = reply
-        logger.info(f"hwpush 触发 overflow msg_cnt={msg_cnt[0]} push_len={len(combined)}")
         await _hwpush_send(combined)
         await sendmsg(client, tok, fu, f"[已推送到华为负一屏] {len(combined)}字符", ct)
-    elif overflow[0] and reply:
-        logger.warning(f"hwpush overflow触发但未启用 enabled={_hwpush_enabled}")
     return reply
 
 def _screenshot():
