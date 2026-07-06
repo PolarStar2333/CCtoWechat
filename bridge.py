@@ -586,6 +586,8 @@ def _is_remote_cmd(text):
     t = text.strip()
     if not t.startswith("/"):
         return False
+    if t.startswith('/hwpush-on"'):
+        return True
     first = t.split()[0].lower()
     return re.match(r'^/[a-zA-Z][a-zA-Z0-9_-]*$', first) is not None
 
