@@ -960,7 +960,7 @@ async def handle(client, tok, raw):
 
 == 其他 ==
 /send — 告诉 Claude 如何发文件/图片到微信
-/hwpush-on — 注入华为负一屏推送说明（不等待回复）
+/hwpush-on"授权码" — 注入华为负一屏推送说明
 /help — 此帮助""".strip()
                 await sendmsg(client, tok, fu, out, ct)
                 continue
@@ -1028,7 +1028,7 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
                 audit("cmd", cmd="send_inject")
                 await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
-            if cmd_word == "/hwpush-on":
+            if cmd.startswith('/hwpush-on"'):
                 m = re.match(r'/hwpush-on"([^"]+)"', text.strip())
                 if not m:
                     await sendmsg(client, tok, fu, '格式: /hwpush-on"授权码"', ct)

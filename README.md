@@ -140,7 +140,7 @@ Claude 弹出权限确认时，微信会收到通知。回复 `/yes` 批准，`/
 | `/debugoff` | 关闭 debug 模式 |
 | `/restart` | 远程重启桥接（需 debug 模式） |
 | `/imageloc [路径]` | 查看 / 设置图片和文件保存路径 |
-| `/hwpush-on` | 注入华为负一屏推送说明 |
+| `/hwpush-on"授权码"` | 注入华为负一屏推送说明 |
 | `/send` | 告诉 Claude 如何发文件/图片到微信 |
 | `/now` | 截屏发送（Claude 无感知） |
 | `/cam` | 摄像头拍照发送 |
