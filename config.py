@@ -13,7 +13,6 @@ _DEFAULTS = {
     "http_host": "127.0.0.1",
     "http_port": 9876,
     "images_dir": "images",
-    "hwpush_auth_code": "",
     "max_qr_refresh": 3,
     "poll_interval": 1,
     "timeouts": {

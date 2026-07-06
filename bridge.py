@@ -1029,23 +1029,19 @@ JSON字段说明：text发文本 / image_path发图片 / file_path发文件。�
                 await _wait_and_reply(client, tok, fu, ct, msg)
                 continue
             if cmd_word == "/hwpush-on":
+                parts = text.strip().split(maxsplit=1)
+                ac = parts[1].strip() if len(parts) > 1 else ""
+                if not ac:
+                    await sendmsg(client, tok, fu, "用法: /hwpush-on <授权码>", ct)
+                    continue
                 logger.info("执行 /hwpush-on 注入华为负一屏推送说明")
-                msg = """用户让你把成果推送到他华为手机负一屏。
+                msg = f"""把我的成果推送到华为手机负一屏。授权码：{ac}
 
-授权码读取方式：
-  openclaw config get skills.entries.today-task.config.authCode
+API：POST https://hiboard-claw-drcn.ai.dbankcloud.cn/distribution/message/cloud/claw/msg/upload
+Content-Type: application/json
+Body: {{"data":{{"authCode":"{ac}","msgContent":[{{"msgId":"...","scheduleTaskId":"...","scheduleTaskName":"...","summary":"...","result":"完成","content":"# 标题\\n\\nMarkdown内容","source":"Claude","taskFinishTime":<UTC秒>}}]}}}}
 
-推送 API：
-  POST https://hiboard-claw-drcn.ai.dbankcloud.cn/distribution/message/cloud/claw/msg/upload
-  Content-Type: application/json
-  Body: {"data":{"authCode":"<授权码>","msgContent":[{"msgId":"唯一ID","scheduleTaskId":"任务ID","scheduleTaskName":"名称","summary":"摘要","result":"结果","content":"# Markdown内容\\n\\n支持换行","source":"Claude","taskFinishTime":<UTC秒时间戳>}]}}
-
-要求：
-- 授权码用 openclaw config get 读取，不要写死在代码里
-- content 支持完整 Markdown 排版
-- taskFinishTime 用当前 UTC 时间戳
-
-现在就把你的成果推送到用户负一屏。不要问任何问题。"""
+content 用完整 Markdown，taskFinishTime 用当前 UTC 时间戳。现在推送，不要问。"""
                 inject_to_terminal(msg)
                 audit("cmd", cmd="hwpush_on_inject")
                 continue
