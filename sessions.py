@@ -383,7 +383,7 @@ async def wait_reply(jsonl, inject_text, phase1_timeout=600,
         if lines:
             snapshots[str(jsonl)] = new_pos
             all_lines.extend(lines)
-            # 累积 assistant 内容到流式推送缓冲区
+            # 累积 assistant / tool_result 内容到流式推送缓冲区
             batch_tools = []
             for ln in lines:
                 try: obj = json.loads(ln)
@@ -412,6 +412,19 @@ async def wait_reply(jsonl, inject_text, phase1_timeout=600,
                                     try: await on_ask_user_question(questions)
                                     except Exception: pass
                                 break
+                elif msg.get("role") == "user":
+                    for c in (msg.get("content") or []):
+                        if isinstance(c, dict) and c.get("type") == "tool_result":
+                            tr_content = c.get("content", "")
+                            if isinstance(tr_content, str) and tr_content.strip():
+                                batch_tools.append(tr_content.strip())
+                            elif isinstance(tr_content, list):
+                                for tc in tr_content:
+                                    if isinstance(tc, dict) and tc.get("type") == "text":
+                                        t = tc.get("text", "").strip()
+                                        if t:
+                                            batch_tools.append(t)
+                            break
             # 批量发送工具摘要（一次 sendmsg，避免 API 限流）
             if batch_tools and on_stream_chunk:
                 try: await on_stream_chunk("\n".join(batch_tools))
