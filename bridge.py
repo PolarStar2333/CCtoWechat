@@ -439,9 +439,6 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
 
     async def _bump():
         msg_cnt[0] += 1
-        if msg_cnt[0] == 9 and _hwpush_enabled:
-            try: await sendmsg(client, tok, fu, "后续内容请在负一屏查看", ct)
-            except Exception: pass
         if msg_cnt[0] >= 10 and _hwpush_enabled:
             overflow[0] = True
 
@@ -458,6 +455,8 @@ async def _wait_with_think(client, tok, fu, ct, jsonl, text, **kw):
         except Exception: pass
         await _bump()
     async def on_stream(delta):
+        if msg_cnt[0] == 9 and _hwpush_enabled:
+            delta += "\n\nClaude已经达到本次问话微信最大回复10条限制，若您认为有后续消息请去负一屏查看"
         try: await sendmsg(client, tok, fu, delta, ct)
         except Exception: pass
         await _bump()
